@@ -50,7 +50,7 @@ cv::Rect getSafeRect(cv::Mat &image, cv::Rect &rect) {
 
 Detect::Detect(const rclcpp::NodeOptions& node_options)
     : Node("radar_detect_node", node_options) {
-    cv::namedWindow("detect", cv::WINDOW_NORMAL);
+    // cv::namedWindow("detect", cv::WINDOW_NORMAL);  // 关闭 OpenCV 窗口
 
     // 使用system函数调用nvidia-smi命令
     std::cout << "Checking CUDA with nvidia-smi...\n";
@@ -117,10 +117,10 @@ Detect::Detect(const rclcpp::NodeOptions& node_options)
     TDT_INFO("Load classify engine success!");
     
 
-    this->armor_yolo = yolo::load(armor_path, yolo::Type::V5,0.4f,0.45f);
+    this->armor_yolo = yolo::load(armor_path, yolo::Type::V5,0.2f,0.45f);  // 降低装甲板阈值从 0.4 到 0.2
     TDT_INFO("Load armor_yolo engine success!");
     // this->yolo = yolo::load(yolo_path, yolo::Type::V5);
-    this->yolo = yolo::load(yolo_path, yolo::Type::V5,0.65f,0.45f);
+    this->yolo = yolo::load(yolo_path, yolo::Type::V5,0.3f,0.45f);  // 降低阈值从 0.65 到 0.3
     TDT_INFO("Load yolo engine success!");
     // if(if_rosbag)  
     // compressed_image_sub = this->create_subscription<sensor_msgs::msg::CompressedImage>(
@@ -143,6 +143,9 @@ void Detect::callback(const std::shared_ptr<sensor_msgs::msg::Image> msg) {
   auto result = yolo->forward(image);
   if(result.size()==0){
     RCLCPP_INFO(this->get_logger(), "No Car!");
+    // 即使没有检测到也发布原始图像
+    auto img_msg = cv_bridge::CvImage(msg->header, "bgr8", img).toImageMsg();
+    image_pub->publish(*img_msg);
     return;
   }else if(result.size()>MAX_CARS){
     RCLCPP_INFO(this->get_logger(), "Too Many Car!");
@@ -317,10 +320,7 @@ void Detect::callback(const std::shared_ptr<sensor_msgs::msg::Image> msg) {
   image_pub->publish(*img_msg);
   
   // 显示检测结果窗口
-  cv::Mat display_img;
-  cv::resize(img, display_img, cv::Size(1280, 960));
-  cv::imshow("detect", display_img);
-  cv::waitKey(1);
+  // OpenCV 窗口已关闭，只通过 ROS 话题发布图像
   
   std::chrono::steady_clock::time_point end = std::chrono::steady_clock::now();
   std::chrono::duration<double> time_used = std::chrono::duration_cast<std::chrono::duration<double>>(end - begin);

@@ -103,3 +103,9 @@ install(
     FILES ${CMAKE_CURRENT_SOURCE_DIR}/../../config/RM2024.png
     DESTINATION share/${PROJECT_NAME}/config
 )
+
+# 安装 Python 检测脚本
+install(
+    PROGRAMS detect/scripts/nyush_detect_node.py
+    DESTINATION lib/${PROJECT_NAME}
+)

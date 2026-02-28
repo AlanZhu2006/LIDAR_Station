@@ -26,6 +26,7 @@
 - [视觉方案详解](#视觉方案详解)
 - [雷达方案详解](#雷达方案详解)
 - [传感器融合](#传感器融合)
+- [LiDAR 建图](#lidar-建图)
 - [相机外参标定](#相机外参标定)
 - [多台电脑分布式运行](#多台电脑分布式运行)
 - [常见问题](#常见问题)
@@ -64,6 +65,7 @@
 
 | 模块 | 状态 | 说明 |
 |------|------|------|
+| **LiDAR 建图 (FAST-LIO)** | ✅ 正常 | 使用 FAST-LIO 建图，生成 PCD 地图文件 |
 | 雷达点云处理 | ✅ 正常 | GICP 配准、动态点云、聚类、卡尔曼 |
 | T-DT 视觉 (rosbag) | ✅ 正常 | 高分辨率 rosbag 测试正常 |
 | T-DT 视觉 (实际相机) | ❌ 不兼容 | 模型需 4096×3000，相机 1440×1080 |
@@ -718,6 +720,162 @@ ros2 launch tdt_vision run_rosbag.launch.py rosbag_file:=/path/to/rosbag.db3
 
 ---
 
+## LiDAR 建图
+
+雷达站需要一个预先建好的场地点云地图（PCD 文件）用于 GICP 配准。本项目使用 FAST-LIO 进行建图。
+
+### 建图工作空间
+
+建图使用独立的工作空间，位于 `mapping_ws/` 目录：
+
+```
+mapping_ws/
+├── src/
+│   └── FAST_LIO/           # FAST-LIO ROS2 版本
+│       ├── config/
+│       │   └── mid360.yaml # Mid-360 配置文件
+│       └── PCD/            # 保存的点云地图
+└── install/
+```
+
+### 安装 FAST-LIO (首次使用)
+
+```bash
+# 创建建图工作空间
+cd ~/Desktop/T-DT-2024-Radar
+mkdir -p mapping_ws/src && cd mapping_ws/src
+
+# 克隆 ROS2 版本的 FAST-LIO
+git clone https://github.com/Ericsii/FAST_LIO.git -b ros2
+
+# 初始化子模块
+cd FAST_LIO
+git submodule update --init --recursive
+
+# 编译
+cd ~/Desktop/T-DT-2024-Radar/mapping_ws
+source /opt/ros/humble/setup.bash
+colcon build
+```
+
+### 建图流程
+
+**步骤 1：配置网络并启动 Livox 驱动**
+
+```bash
+# 终端 1：配置网络
+sudo ip addr add 192.168.1.5/24 dev enp4s0
+ping 192.168.1.114  # 测试雷达连接
+
+# 启动驱动（必须使用 CustomMsg 格式）
+cd ~/Desktop/T-DT-2024-Radar
+source install/setup.bash
+ros2 launch livox_ros_driver2 msg_MID360_launch.py
+```
+
+> **重要**：建图时 `xfer_format` 必须设为 `1`（CustomMsg 格式），在 `src/livox_ros_driver2/launch_ROS2/msg_MID360_launch.py` 中修改。
+
+**步骤 2：启动 FAST-LIO**
+
+```bash
+# 终端 2：启动建图
+cd ~/Desktop/T-DT-2024-Radar/mapping_ws
+source /opt/ros/humble/setup.bash
+source install/setup.bash
+LD_PRELOAD=/lib/x86_64-linux-gnu/libusb-1.0.so.0 ros2 launch fast_lio mapping.launch.py config_file:=mid360.yaml
+```
+
+等待出现 `IMU Initial Done` 消息表示初始化完成。
+
+**步骤 3：采集地图数据**
+
+- 拿着雷达在**空场地**（无机器人）缓慢行走
+- 覆盖整个场地区域
+- 在 RViz 中观察点云累积情况
+- 建议采集时间：3-5 分钟
+
+**步骤 4：保存地图**
+
+```bash
+# 终端 3：调用保存服务（FAST-LIO 运行期间）
+source /opt/ros/humble/setup.bash
+ros2 service call /map_save std_srvs/srv/Trigger
+```
+
+FAST-LIO 会输出：
+```
+[INFO] Saving map to ./test.pcd...
+```
+
+**步骤 5：检查并移动地图文件**
+
+```bash
+# 检查生成的地图
+ls -la ~/Desktop/T-DT-2024-Radar/mapping_ws/test.pcd
+
+# 查看点云（可选）
+pcl_viewer ~/Desktop/T-DT-2024-Radar/mapping_ws/test.pcd
+
+# 移动到项目配置目录
+cp ~/Desktop/T-DT-2024-Radar/mapping_ws/test.pcd ~/Desktop/T-DT-2024-Radar/config/RM2024.pcd
+```
+
+### FAST-LIO 配置说明
+
+配置文件位置：`mapping_ws/src/FAST_LIO/config/mid360.yaml`
+
+| 参数 | 值 | 说明 |
+|------|-----|------|
+| `lid_topic` | `/livox/lidar` | LiDAR 话题 |
+| `imu_topic` | `/livox/imu` | IMU 话题 |
+| `lidar_type` | `1` | Livox 系列 |
+| `pcd_save.pcd_save_en` | `true` | 启用 PCD 保存 |
+| `map_file_path` | `./test.pcd` | 保存路径 |
+
+### 常见问题
+
+**问题 1：No point, skip this scan!**
+
+- **原因**：IMU 数据未正确接收或 IMU 初始化未完成
+- **解决**：
+  1. 检查 IMU 话题：`ros2 topic hz /livox/imu`（应有 ~200Hz）
+  2. 等待 `IMU Initial Done` 消息出现
+  3. 确保 `xfer_format` 设为 `1`（CustomMsg 格式）
+
+**问题 2：libusb_set_option undefined symbol**
+
+- **原因**：MVS SDK 的 libusb 与系统版本冲突
+- **解决**：启动命令前加 `LD_PRELOAD=/lib/x86_64-linux-gnu/libusb-1.0.so.0`
+
+**问题 3：PCD 文件大小为 0 或很小**
+
+- **原因**：未调用保存服务就退出了
+- **解决**：在 FAST-LIO 运行期间调用 `ros2 service call /map_save std_srvs/srv/Trigger`
+
+**问题 4：RViz 显示 "frame camera_init does not exist"**
+
+- **原因**：FAST-LIO 使用 `camera_init` 作为固定坐标系
+- **解决**：在 RViz 中将 Fixed Frame 设为 `camera_init` 或 `body`
+
+### Livox 驱动模式切换
+
+| 场景 | xfer_format | 话题类型 |
+|------|-------------|----------|
+| **建图（FAST-LIO）** | `1` | `livox_ros_driver2/msg/CustomMsg` |
+| **检测（T-DT）** | `0` | `sensor_msgs/msg/PointCloud2` |
+
+修改位置：`src/livox_ros_driver2/launch_ROS2/msg_MID360_launch.py`
+
+```python
+# 建图时
+xfer_format = 1  # CustomMsg
+
+# 检测时
+xfer_format = 0  # PointCloud2
+```
+
+---
+
 ## 相机外参标定
 
 相机外参标定用于将相机图像中的 2D 坐标转换为场地 3D 坐标，是相机-雷达融合的关键。
@@ -903,7 +1061,7 @@ python onnx2engine.py
 ```
 T-DT-2024-Radar/
 ├── config/                     # 配置文件
-│   ├── RM2024.pcd             # 场地地图
+│   ├── RM2024.pcd             # 场地地图（用于 GICP 配准）
 │   ├── camera_params.yaml     # 相机内参
 │   ├── out_matrix.yaml        # 相机外参（标定输出）
 │   └── detect_params.yaml     # 检测参数
@@ -911,6 +1069,14 @@ T-DT-2024-Radar/
 │   ├── ONNX/                  # ONNX 模型
 │   └── TensorRT/              # TensorRT 引擎
 ├── bag/                        # rosbag 测试数据
+├── mapping_ws/                 # 建图工作空间（FAST-LIO）
+│   ├── src/
+│   │   └── FAST_LIO/          # FAST-LIO ROS2 版本
+│   │       ├── config/
+│   │       │   └── mid360.yaml # Mid-360 配置
+│   │       └── PCD/           # 保存的点云地图
+│   └── install/
+├── map/                        # 地图存储目录（可选）
 ├── src/
 │   ├── lidar/                 # 雷达处理模块
 │   │   ├── localization/      # GICP 配准
@@ -973,7 +1139,15 @@ NYUSH_Robotics_RM_RadarStation/
 - [x] Livox-SDK2 编译安装
 - [x] livox_ros_driver2 编译
 - [x] 雷达配置文件修改
-- [x] 点云格式修改：`xfer_format = 0`
+- [x] 点云格式切换支持：`xfer_format = 0` (PointCloud2) / `xfer_format = 1` (CustomMsg)
+
+### LiDAR 建图 (FAST-LIO)
+
+- [x] FAST-LIO ROS2 版本安装（Ericsii/FAST_LIO ros2 分支）
+- [x] Mid-360 配置文件 (`mid360.yaml`)
+- [x] IMU 初始化调试
+- [x] 地图保存服务 (`/map_save`)
+- [x] libusb 冲突解决（LD_PRELOAD）
 
 ### 编译问题修复
 
@@ -1010,6 +1184,16 @@ NYUSH_Robotics_RM_RadarStation/
 ---
 
 ## 更新日志
+
+### 2026-02-28 (第二次更新)
+- **LiDAR 建图功能完成**
+  - 安装 FAST-LIO ROS2 版本（独立工作空间 `mapping_ws/`）
+  - 配置 Mid-360 参数（`mid360.yaml`）
+  - 解决 IMU 初始化问题（需等待 `IMU Initial Done`）
+  - 解决 libusb 符号冲突（`LD_PRELOAD` 方案）
+  - 实现地图保存服务调用（`ros2 service call /map_save`）
+  - 添加 Livox 驱动模式切换说明（建图用 CustomMsg，检测用 PointCloud2）
+- 更新 README 添加完整建图指南
 
 ### 2026-02-28
 - **NYUSH 视觉检测完成 ROS2 移植**

@@ -7,23 +7,26 @@ sys.path.append(os.path.join(get_package_share_directory('tdt_vision'), 'launch'
 
 from launch_ros.descriptions import ComposableNode
 from launch_ros.actions import ComposableNodeContainer, Node
-from launch.actions import TimerAction, Shutdown
+from launch.actions import TimerAction, Shutdown, DeclareLaunchArgument
 from launch import LaunchDescription
 from launch.actions import IncludeLaunchDescription
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from ament_index_python.packages import get_package_share_directory
+from launch.substitutions import LaunchConfiguration
 
 def generate_launch_description():
+    rosbag_file_arg = DeclareLaunchArgument(
+        'rosbag_file',
+        default_value='',
+        description='Path to rosbag sqlite file (e.g. /path/to/merged_bag_0.db3)',
+    )
         
     def get_rosbag_player_node(package, plugin):
         return ComposableNode(
             package=package,
             plugin=plugin,
             name='rosbag_player_node',
-            parameters=[ {'rosbag_file': 
-                # '/home/tdt/rosbag/ros2bags/radar_record0531_2032_54/merged_bag/merged_bag_0.db3'
-                '/home/shenxw/Rosbag/适应性录像第二把/merged_bag/merged_bag_0.db3'
-                }],
+            parameters=[{'rosbag_file': LaunchConfiguration('rosbag_file')}],
             extra_arguments=[{'use_intra_process_comms': True}]
         )  
 
@@ -63,6 +66,7 @@ def generate_launch_description():
                     get_package_share_directory('tdt_vision'), 'launch', 'map_server_launch.py')]),
              )
     return LaunchDescription([
+            rosbag_file_arg,
             cam_detector,
             plugin_map_launch_cmd
         ])

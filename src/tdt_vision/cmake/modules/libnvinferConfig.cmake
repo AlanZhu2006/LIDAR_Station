@@ -18,7 +18,12 @@ if(WIN32)
         PATHS ${nvinfer_ROOT_DIR})
 else()
     find_path(nvinfer_INCLUDE_DIR NvInfer.h
-        PATHS ${nvinfer_ROOT_DIR})
+        PATHS 
+            ${nvinfer_ROOT_DIR}
+            /tmp/tensorrt_headers/include
+            /usr/include/x86_64-linux-gnu
+            /usr/local/cuda/include
+            /usr/include)
 endif()
 
 if(MSVC)
@@ -32,9 +37,21 @@ if(MSVC)
 
     set(nvinfer_LIBRARY optimized ${nvinfer_LIBRARY_RELEASE} debug ${nvinfer_LIBRARY_DEBUG})
 else()
+    # Try to find library with standard name first
     find_library(nvinfer_LIBRARY nvinfer
-        PATHS ${nvinfer_ROOT_DIR}
+        PATHS 
+            ${nvinfer_ROOT_DIR}
+            /usr/lib/x86_64-linux-gnu
+            /usr/lib
+            /usr/local/lib
         PATH_SUFFIXES lib lib64)
+    
+    # If not found, try versioned library directly
+    if(NOT nvinfer_LIBRARY)
+        if(EXISTS "/usr/lib/x86_64-linux-gnu/libnvinfer.so.10")
+            set(nvinfer_LIBRARY "/usr/lib/x86_64-linux-gnu/libnvinfer.so.10")
+        endif()
+    endif()
 endif()
 
 find_package_handle_standard_args(nvinfer DEFAULT_MSG nvinfer_INCLUDE_DIR nvinfer_LIBRARY)

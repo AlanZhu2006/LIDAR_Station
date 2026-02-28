@@ -19,9 +19,12 @@ macro(build_livox_sdk)
     GIT_TAG ${livox_sdk_REV}
     GIT_SHALLOW OFF
     TIMEOUT 60
+    PATCH_COMMAND ${CMAKE_COMMAND} -E echo "Patching thread_base.h..." &&
+      sed -i "s/#include <thread>/#include <thread>\\n#include <memory>/" sdk_core/src/base/thread_base.h
     CMAKE_ARGS
       -DCMAKE_INSTALL_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/livox-sdk_install
       -DCMAKE_POSITION_INDEPENDENT_CODE=ON
+      -DCMAKE_CXX_FLAGS=-Wno-error
       ${extra_cmake_args}
   )
 

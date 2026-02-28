@@ -3,10 +3,11 @@ import sys
 import yaml
 from launch_ros.descriptions import ComposableNode
 from launch_ros.actions import ComposableNodeContainer, Node
-from launch.actions import TimerAction, Shutdown
+from launch.actions import TimerAction, Shutdown, DeclareLaunchArgument
 from launch import LaunchDescription
 from launch.actions import IncludeLaunchDescription
 from launch.launch_description_sources import PythonLaunchDescriptionSource
+from launch.substitutions import LaunchConfiguration
 import launch
 
 def dump_params(param_file_path, node_name):
@@ -14,12 +15,14 @@ def dump_params(param_file_path, node_name):
         return [yaml.safe_load(file)[node_name]['ros__parameters']]
 
 def generate_launch_description():
+    use_sim_time = LaunchConfiguration('use_sim_time', default='false')
     
     def get_localization_node(package, plugin):
         return ComposableNode(
             package=package,
             plugin=plugin,
             name='localization_node',
+            parameters=[{'use_sim_time': use_sim_time}],
             extra_arguments=[{'use_intra_process_comms': True},
                              {'use_multi_threaded_executor': True}],
         )
@@ -29,6 +32,7 @@ def generate_launch_description():
             package=package,
             plugin=plugin,
             name='dynamic_cloud_node',
+            parameters=[{'use_sim_time': use_sim_time}],
             extra_arguments=[{'use_intra_process_comms': True}]
         )
         
@@ -37,6 +41,7 @@ def generate_launch_description():
             package=package,
             plugin=plugin,
             name='cluster_node',
+            parameters=[{'use_sim_time': use_sim_time}],
             extra_arguments=[{'use_intra_process_comms': True}]
         )
         
@@ -45,6 +50,7 @@ def generate_launch_description():
             package=package,
             plugin=plugin,
             name='kalman_filter_node',
+            parameters=[{'use_sim_time': use_sim_time}],
             extra_arguments=[{'use_intra_process_comms': True}]
         )
         
@@ -90,5 +96,6 @@ def generate_launch_description():
     # cmd = launch.actions.ExecuteProcess(cmd=['ros2', 'bag', 'play', 'config/merged_bag/merged_bag_0.db3', '--loop', '--start-offset', '250'])
 
     return LaunchDescription([
+            DeclareLaunchArgument('use_sim_time', default_value='false', description='Use simulation time'),
             lidar_detector
             ])

@@ -34,7 +34,7 @@ class Detect final : public rclcpp::Node {
 
   bool if_rosbag=false;
   int EnemyColor;//0为蓝色 2为红色
-  int debug;
+  int debug = 1;  // 启用调试绘制
   std::string yolo_path;
   std::string armor_path;
   std::string classify_path;

@@ -183,7 +183,8 @@ void DynamicCloud::callback(const sensor_msgs::msg::PointCloud2::SharedPtr msg)
     for (size_t i = 0; i < transformed_cloud.size(); i++)
     {
         auto &point = transformed_cloud.points[i];
-        if (point.x < 3 || point.x > 28 || point.y < 0 || point.y > 15 || point.z < 0 || point.z > 1.4 ||
+        // 原条件针对RM2024场地，现放宽为更大范围（测试用）
+        if (point.x < -50 || point.x > 50 || point.y < -50 || point.y > 50 || point.z < -5 || point.z > 10 ||
             //或者y(0,5),x(25,28)不要
             (point.y > 0 && point.y < 5 && point.x > 25) ||
             //或者y(11,12),x(23,24)不要

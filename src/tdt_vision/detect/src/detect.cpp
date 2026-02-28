@@ -311,17 +311,20 @@ void Detect::callback(const std::shared_ptr<sensor_msgs::msg::Image> msg) {
   }
   detect_result.header.stamp=msg->header.stamp;
   pub->publish(detect_result);
+  
+  // 发布检测图像
+  auto img_msg = cv_bridge::CvImage(msg->header, "bgr8", img).toImageMsg();
+  image_pub->publish(*img_msg);
+  
+  // 显示检测结果窗口
+  cv::Mat display_img;
+  cv::resize(img, display_img, cv::Size(1280, 960));
+  cv::imshow("detect", display_img);
+  cv::waitKey(1);
+  
   std::chrono::steady_clock::time_point end = std::chrono::steady_clock::now();
   std::chrono::duration<double> time_used = std::chrono::duration_cast<std::chrono::duration<double>>(end - begin);
-  // RCLCPP_INFO(this->get_logger(), "Time used: %fms", time_used.count()*1000);
   std::cout<<"Detect Time: "<<time_used.count()*1000<<"ms"<<std::endl;
-  // cv::Mat final_img;
-  // cv::resize(img,final_img,cv::Size(1536, 1125));
-  // cv::imshow("detect", final_img);
-  // auto key = cv::waitKey(1);
-  // if(key=='r'){
-  //   debug = !debug;
-  // }
 }
 }// namespace tdt_radar
 RCLCPP_COMPONENTS_REGISTER_NODE(tdt_radar::Detect)

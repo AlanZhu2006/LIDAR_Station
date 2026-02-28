@@ -6,3 +6,14 @@ install/
 config/merged_bag/*
 
 *.engine
+
+# 大文件和临时文件
+bag/
+*.db3
+frames_*.gv
+frames_*.pdf
+CAMERA.txt
+LIDAR.txt
+
+# 外部 SDK（需要单独安装）
+src/Livox-SDK2/

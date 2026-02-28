@@ -20,6 +20,9 @@ namespace tdt_radar
         fs1.open("./config/camera_params.yaml", cv::FileStorage::READ);
         fs1["camera_matrix"] >> this->camera_matrix;
         fs1["dist_coeffs"] >> this->dist_coeffs;
+        if (this->dist_coeffs.empty()) {
+            fs1["dist_coeff"] >> this->dist_coeffs;
+        }
         fs1.release();
         std::cout<<"Resolve camera"<<camera_matrix<<std::endl;
         std::cout<<"Resolve dist"<<dist_coeffs<<std::endl;
@@ -153,6 +156,9 @@ namespace tdt_radar
         fs.open("./config/camera_params.yaml", cv::FileStorage::READ);
         fs["camera_matrix"] >> this->camera_matrix;
         fs["dist_coeffs"] >> this->dist_coeffs;
+        if (this->dist_coeffs.empty()) {
+            fs["dist_coeff"] >> this->dist_coeffs;
+        }
         fs.release();
 
         fs.open("./config/out_matrix.yaml", cv::FileStorage::READ);

@@ -19,8 +19,14 @@ namespace tdt_radar {
         fs.open("./config/camera_params.yaml", cv::FileStorage::READ);
         fs["camera_matrix"] >> camera_matrix;
         fs["dist_coeffs"] >> dist_coeffs;
+        if (dist_coeffs.empty()) {
+            fs["dist_coeff"] >> dist_coeffs;
+        }
         int usechessborad=0;
         fs["usechessborad"] >> usechessborad;
+        if (usechessborad == 0) {
+            fs["usechessboard"] >> usechessborad;
+        }
         fs.release();
 
         real_points.push_back(self_R0TL);

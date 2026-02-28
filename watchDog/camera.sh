@@ -11,9 +11,15 @@ cd $SCRIPT_PATH/..
 echo $SCRIPT_PATH
 
 # 设置程序路径
-PROGRAM="./src/tdt_vision/launch/radar.launch.py"
+PROGRAM="tdt_vision run_rosbag.launch.py"
+ROSBAG_FILE=${ROSBAG_FILE:-}
 
 source ./install/setup.zsh
+if [ -z "$ROSBAG_FILE" ]; then
+    echo "ROSBAG_FILE is empty. Example:"
+    echo "export ROSBAG_FILE=/absolute/path/to/merged_bag_0.db3"
+    exit 1
+fi
 echo "to be launched"
 sleep 5
 while true
@@ -26,7 +32,7 @@ do
         echo "$PROGRAM launch failed!"
 
         # 启动程序
-        ros2 launch $PROGRAM
+        ros2 launch $PROGRAM rosbag_file:=$ROSBAG_FILE
     fi
 
     # 等待一段时间再次检查

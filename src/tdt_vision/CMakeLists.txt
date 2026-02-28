@@ -44,6 +44,18 @@ add_definitions(-D use_tensorrt)
 enable_language(CUDA)
 include_directories(${CUDA_INCLUDE_DIRS})
 include_directories(${nvinfer_INCLUDE_DIRS})
+
+# Find nvonnxparser library
+find_library(nvonnxparser_LIBRARY 
+    NAMES nvonnxparser nvonnxparser.so.10
+    PATHS /usr/lib/x86_64-linux-gnu /usr/lib /usr/local/lib)
+if(NOT nvonnxparser_LIBRARY)
+    if(EXISTS "/usr/lib/x86_64-linux-gnu/libnvonnxparser.so.10")
+        set(nvonnxparser_LIBRARY "/usr/lib/x86_64-linux-gnu/libnvonnxparser.so.10")
+    endif()
+endif()
+message(STATUS "Found nvonnxparser: ${nvonnxparser_LIBRARY}")
+
 add_subdirectory(yolo)
 include_directories(${PROJECT_SOURCE_DIR}/yolo)
 
@@ -51,7 +63,7 @@ target_link_libraries(${RADAR_DETECT}
     yolo 
     ${nvinfer_LIBRARY} 
     cudart 
-    nvonnxparser 
+    ${nvonnxparser_LIBRARY}
     fmt 
     ${PCL_LIBRARIES}
     )
@@ -84,4 +96,10 @@ rclcpp_components_register_node(${RADAR_CALIBRATE}
 ament_auto_package(
     INSTALL_TO_SHARE
     launch
+    maps
+)
+
+install(
+    FILES ${CMAKE_CURRENT_SOURCE_DIR}/../../config/RM2024.png
+    DESTINATION share/${PROJECT_NAME}/config
 )

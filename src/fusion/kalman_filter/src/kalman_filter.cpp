@@ -6,6 +6,9 @@ namespace tdt_radar{
 
 KalmanFilter::KalmanFilter(const rclcpp::NodeOptions& node_options):rclcpp::Node("kalman_filter_node",node_options)
 {
+    this->declare_parameter<bool>("debug_camera_match", false);
+    this->declare_parameter<double>("camera_detect_radius", 1.0);
+    this->declare_parameter<bool>("publish_stationary_targets", false);
     sub_ = this->create_subscription<sensor_msgs::msg::PointCloud2>("/livox/lidar_cluster", 10, std::bind(&KalmanFilter::callback, this, std::placeholders::_1));
     pub_ = this->create_publisher<sensor_msgs::msg::PointCloud2>("/livox/lidar_kalman", 10);
     radar_pub_ = this->create_publisher<vision_interface::msg::Radar2Sentry>("/radar2sentry", 10);
@@ -25,8 +28,16 @@ void KalmanFilter::match_callback(const vision_interface::msg::MatchInfo::Shared
 
 void KalmanFilter::detect_callback(const vision_interface::msg::DetectResult::SharedPtr msg)
 {
-    // RCLCPP_INFO(this->get_logger(), "Detect_callback");
     rclcpp::Time time = msg->header.stamp;
+    bool debug = this->get_parameter("debug_camera_match").as_bool();
+    float detect_r = static_cast<float>(this->get_parameter("camera_detect_radius").as_double());
+    for (auto &kf : KFs) {
+        kf.detect_r = detect_r;
+    }
+    int red_matched = 0, blue_matched = 0;
+    float min_dist_fail = 1e9;
+    double max_time_diff_fail = 0;
+
     for(int i=0;i<6;i++)
     {
         pcl::PointXY red_point;
@@ -35,9 +46,13 @@ void KalmanFilter::detect_callback(const vision_interface::msg::DetectResult::Sh
         if(red_point.x == 0 || red_point.y == 0)continue;
         for(auto &kf : KFs)
         {
-            // int number = i+1;
-            // if (number == 6)number++;
-            kf.camera_match(time, red_point, 2, i);
+            float d; double t;
+            if (kf.camera_match(time, red_point, 2, i, debug ? &d : nullptr, debug ? &t : nullptr)) {
+                red_matched++;
+            } else if (debug && KFs.size() > 0) {
+                if (d >= 0 && d < min_dist_fail) min_dist_fail = d;
+                if (t > max_time_diff_fail) max_time_diff_fail = t;
+            }
         }
 
         pcl::PointXY blue_point;
@@ -46,9 +61,24 @@ void KalmanFilter::detect_callback(const vision_interface::msg::DetectResult::Sh
         if(blue_point.x == 0 || blue_point.y == 0)continue;
         for(auto &kf : KFs)
         {
-            // int number = i+1;
-            // if (number == 6)number++;
-            kf.camera_match(time, blue_point, 0, i);
+            float d; double t;
+            if (kf.camera_match(time, blue_point, 0, i, debug ? &d : nullptr, debug ? &t : nullptr)) {
+                blue_matched++;
+            } else if (debug && KFs.size() > 0) {
+                if (d >= 0 && d < min_dist_fail) min_dist_fail = d;
+                if (t > max_time_diff_fail) max_time_diff_fail = t;
+            }
+        }
+    }
+
+    if (debug && (red_matched > 0 || blue_matched > 0 || min_dist_fail < 1e8 || max_time_diff_fail > 0)) {
+        RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 2000,
+            "camera_match: %d red, %d blue matched | KFs=%zu", red_matched, blue_matched, KFs.size());
+        if (red_matched == 0 && blue_matched == 0 && KFs.size() > 0) {
+            RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 2000,
+                "camera_match 无匹配: 最近距离=%.2fm(需<1m), 最大时间差=%.2fs(需<1s). "
+                "可能原因: 1)resolve_result与lidar坐标系不一致(检查field_width_m/field_height_m) 2)时间不同步 3)可临时增大camera_detect_radius",
+                min_dist_fail < 1e8 ? min_dist_fail : -1.0, max_time_diff_fail);
         }
     }
     // for(auto &kf : KFs)
@@ -72,6 +102,9 @@ void KalmanFilter::lidar_callback(const vision_interface::msg::RadarWarn::Shared
 void KalmanFilter::callback(const sensor_msgs::msg::PointCloud2::SharedPtr msg)
 {
     rclcpp::Time time = msg->header.stamp;
+    bool debug = this->get_parameter("debug_camera_match").as_bool();
+    float detect_r = static_cast<float>(this->get_parameter("camera_detect_radius").as_double());
+    bool publish_stationary_targets = this->get_parameter("publish_stationary_targets").as_bool();
     auto now_time = std::chrono::steady_clock::now();
     pcl::PointCloud<pcl::PointXYZ>::Ptr cloud(new pcl::PointCloud<pcl::PointXYZ>);
     pcl::PointCloud<pcl::PointXY>::Ptr cloud_xy(new pcl::PointCloud<pcl::PointXY>);
@@ -86,6 +119,7 @@ void KalmanFilter::callback(const sensor_msgs::msg::PointCloud2::SharedPtr msg)
     if(cloud_xy->points.size() == 0)return;
     for(auto &kf : KFs)
     {
+        kf.detect_r = detect_r;
         kf.update_predict_point();
         kf.has_updated = false;
     }
@@ -105,6 +139,7 @@ void KalmanFilter::callback(const sensor_msgs::msg::PointCloud2::SharedPtr msg)
         if(match_kf_indexs.size() == 0)
         {
             Kalman_filter_plus kf(point, time);
+            kf.detect_r = detect_r;
             KFs.push_back(kf);
             // std::cout<<"new kf"<<std::endl;
         }
@@ -131,6 +166,8 @@ void KalmanFilter::callback(const sensor_msgs::msg::PointCloud2::SharedPtr msg)
         }
     }
     pcl::PointCloud<pcl::PointXYZRGB>::Ptr cloud_filtered(new pcl::PointCloud<pcl::PointXYZRGB>);
+    int stationary_filtered = 0;
+    int published_points = 0;
     for(int i = KFs.size() - 1; i >= 0; i--)
     {
         if((KFs[i].last_time) > 1.5){
@@ -139,11 +176,15 @@ void KalmanFilter::callback(const sensor_msgs::msg::PointCloud2::SharedPtr msg)
         }
         else
         {
-            // if(KFs[i].has_updated)
-            // {
+            bool stationary = KFs[i].is_stationary();
+            if (stationary && !publish_stationary_targets) {
+                stationary_filtered++;
+                continue;  // 静止目标默认不发布
+            }
             pcl::PointXYZRGB point;
-            point.x = KFs[i].predict_point.x;
-            point.y = KFs[i].predict_point.y;
+            pcl::PointXY out_pt = KFs[i].get_output_point();
+            point.x = out_pt.x;
+            point.y = out_pt.y;
             point.z = 1.5;
             int color = KFs[i].get_color();
             switch (color)
@@ -155,7 +196,7 @@ void KalmanFilter::callback(const sensor_msgs::msg::PointCloud2::SharedPtr msg)
             case 2:
                 point.r = 255;
                 break;
-            
+
             default:
                 point.r = KFs[i].color[0];
                 point.g = KFs[i].color[1];
@@ -163,7 +204,7 @@ void KalmanFilter::callback(const sensor_msgs::msg::PointCloud2::SharedPtr msg)
                 break;
             }
             cloud_filtered->points.push_back(point);
-            // }
+            published_points++;
         }
     }
     cloud_filtered->header.frame_id = "rm_frame";
@@ -176,20 +217,23 @@ void KalmanFilter::callback(const sensor_msgs::msg::PointCloud2::SharedPtr msg)
     float dur_time = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - now_time).count();
     // RCLCPP_INFO(this->get_logger(), "Kalman Callback time is %f ms", dur_time);
     vision_interface::msg::DetectResult detect_msg;
+    detect_msg.header.stamp = msg->header.stamp;
     for(auto kf : KFs)
     {
         if(kf.detect_history.size()==0)continue;
+        if(kf.is_stationary() && !publish_stationary_targets)continue;
+        pcl::PointXY out_pt = kf.get_output_point();
         if(kf.get_color() == 0)//蓝色
         {
             int number= kf.get_number();
-            detect_msg.blue_x[number] = kf.predict_point.x;
-            detect_msg.blue_y[number] = kf.predict_point.y;
+            detect_msg.blue_x[number] = out_pt.x;
+            detect_msg.blue_y[number] = out_pt.y;
         }
         if(kf.get_color() == 2)//红色
         {
             int number= kf.get_number();
-            detect_msg.red_x[number] = kf.predict_point.x;
-            detect_msg.red_y[number] = kf.predict_point.y;
+            detect_msg.red_x[number] = out_pt.x;
+            detect_msg.red_y[number] = out_pt.y;
         }
     }
     if(match_info.self_color==0){
@@ -225,6 +269,11 @@ void KalmanFilter::callback(const sensor_msgs::msg::PointCloud2::SharedPtr msg)
             //工程赋值
         }
     }
+    if (debug && (published_points > 0 || stationary_filtered > 0 || !KFs.empty())) {
+        RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 2000,
+            "kalman_publish: total_kfs=%zu, published=%d, stationary_filtered=%d, publish_stationary_targets=%s",
+            KFs.size(), published_points, stationary_filtered, publish_stationary_targets ? "true" : "false");
+    }
     radar_detect_pub_->publish(detect_msg);
 
     vision_interface::msg::Radar2Sentry radar_msg;
@@ -232,12 +281,15 @@ void KalmanFilter::callback(const sensor_msgs::msg::PointCloud2::SharedPtr msg)
         for(int i=0;i<6;i++){
             radar_msg.radar_enemy_x[i]=detect_msg.red_x[i];
             radar_msg.radar_enemy_y[i]=detect_msg.red_y[i];
+        }
+    }else{
+        for(int i=0;i<6;i++){
+            radar_msg.radar_enemy_x[i]=detect_msg.blue_x[i];
+            radar_msg.radar_enemy_y[i]=detect_msg.blue_y[i];
+        }
     }
-        
+
     radar_pub_->publish(radar_msg);
-}
 }
 }//namespace tdt_radar
 RCLCPP_COMPONENTS_REGISTER_NODE(tdt_radar::KalmanFilter)
-
-

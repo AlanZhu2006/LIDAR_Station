@@ -62,6 +62,16 @@ def generate_launch_description():
         default_value='',
         description='Optional override for NYUSH mask image path',
     )
+    apply_testmap_rm_alignment_arg = DeclareLaunchArgument(
+        'apply_testmap_rm_alignment',
+        default_value=os.environ.get('APPLY_TESTMAP_RM_ALIGNMENT', 'false'),
+        description='Whether to transform testmap metric coordinates into LiDAR rm_frame before publishing /resolve_result',
+    )
+    alignment_config_path_arg = DeclareLaunchArgument(
+        'alignment_config_path',
+        default_value=os.environ.get('TESTMAP_ALIGNMENT_CONFIG', ''),
+        description='Path to the saved testmap->rm_frame similarity transform YAML',
+    )
     brightness_gamma_arg = DeclareLaunchArgument(
         'brightness_gamma',
         default_value='0.7',
@@ -152,6 +162,11 @@ def generate_launch_description():
         default_value='0',
         description='NYUSH 内部检测处理高度；0=使用原始 camera_image 高度',
     )
+    max_processing_fps_arg = DeclareLaunchArgument(
+        'max_processing_fps',
+        default_value='12.0',
+        description='NYUSH 最大处理帧率；限制目标进入视野时的推理负载，0=不限制',
+    )
 
     nyush_world_node = Node(
         package='tdt_vision',
@@ -171,6 +186,8 @@ def generate_launch_description():
             'test_calib_map_path': LaunchConfiguration('test_calib_map_path'),
             'test_array_path': LaunchConfiguration('test_array_path'),
             'test_mask_path': LaunchConfiguration('test_mask_path'),
+            'apply_testmap_rm_alignment': LaunchConfiguration('apply_testmap_rm_alignment'),
+            'alignment_config_path': LaunchConfiguration('alignment_config_path'),
             'brightness_gamma': LaunchConfiguration('brightness_gamma'),
             'brightness_bias': LaunchConfiguration('brightness_bias'),
             'brightness_clahe': LaunchConfiguration('brightness_clahe'),
@@ -189,6 +206,7 @@ def generate_launch_description():
             'debug_image_every_n': LaunchConfiguration('debug_image_every_n'),
             'process_width': LaunchConfiguration('process_width'),
             'process_height': LaunchConfiguration('process_height'),
+            'max_processing_fps': LaunchConfiguration('max_processing_fps'),
         }],
     )
 
@@ -204,6 +222,8 @@ def generate_launch_description():
         test_calib_map_path_arg,
         test_array_path_arg,
         test_mask_path_arg,
+        apply_testmap_rm_alignment_arg,
+        alignment_config_path_arg,
         brightness_gamma_arg,
         brightness_bias_arg,
         brightness_clahe_arg,
@@ -222,5 +242,6 @@ def generate_launch_description():
         debug_image_every_n_arg,
         process_width_arg,
         process_height_arg,
+        max_processing_fps_arg,
         nyush_world_node,
     ])

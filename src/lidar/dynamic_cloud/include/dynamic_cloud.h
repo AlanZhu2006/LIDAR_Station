@@ -31,6 +31,7 @@ class DynamicCloud : public rclcpp::Node
     double ceiling_z_max_ = 100.0;
     float kd_tree_threshold_sq_ = 0.28f;  // ~0.53m^2，>此值判为动态，减少误判
     int process_every_n_ = 1;              // 每N帧做一次kd-tree；1=每帧，2/3=跳帧省算力
+    bool publish_accumulated_dynamic_cloud_ = false;
     int frame_counter_ = 0;
     pcl::PointCloud<pcl::PointXYZ> last_dynamic_cloud_;
     pcl::PointCloud<pcl::PointXYZ>::Ptr map_cloud;

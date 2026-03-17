@@ -25,9 +25,15 @@ class Cluster : public rclcpp::Node
     rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr sub_;
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pub_;
     double cluster_tolerance_ = 0.25;
-    int min_cluster_size_ = 12;
+    int min_cluster_size_ = 8;
     int max_cluster_size_ = 1000;
     double cluster_voxel_leaf_size_ = 0.0;
+    double min_cluster_diagonal_ = 0.08;
+    double max_cluster_diagonal_ = 2.50;
+    double min_cluster_height_ = 0.03;
+    double max_cluster_height_ = 2.20;
+    double min_cluster_xy_span_ = 0.04;
+    bool cluster_use_bbox_center_ = false;
     void callback(const sensor_msgs::msg::PointCloud2::SharedPtr msg);
     std::vector<pcl::PointCloud<pcl::PointXYZ>::Ptr> accumulated_clouds_;
 };

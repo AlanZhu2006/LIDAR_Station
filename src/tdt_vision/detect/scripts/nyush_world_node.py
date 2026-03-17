@@ -18,6 +18,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 import rclpy
+import yaml
 from cv_bridge import CvBridge
 from rclpy.node import Node
 from rclpy.qos import HistoryPolicy
@@ -84,6 +85,7 @@ class NYUSHWorldNode(Node):
         self.declare_parameter("process_width", 0)
         self.declare_parameter("process_height", 0)
         self.declare_parameter("process_interval_ms", 5)
+        self.declare_parameter("max_processing_fps", 15.0)
         self.declare_parameter("car_engine", "models/car.engine")
         self.declare_parameter("armor_engine", "models/armor.engine")
         self.declare_parameter("car_yaml", "yaml/car.yaml")
@@ -99,6 +101,8 @@ class NYUSHWorldNode(Node):
         self.declare_parameter("test_calib_map_path", "")
         self.declare_parameter("test_array_path", "")
         self.declare_parameter("test_mask_path", "")
+        self.declare_parameter("apply_testmap_rm_alignment", False)
+        self.declare_parameter("alignment_config_path", "")
         self.declare_parameter("brightness_gamma", 0.7)   # <1 提亮，0.7 轻度
         self.declare_parameter("brightness_bias", 20)      # 亮度偏移
         self.declare_parameter("brightness_clahe", True)  # CLAHE 自适应增强
@@ -132,6 +136,15 @@ class NYUSHWorldNode(Node):
         self.process_width = max(0, int(self.get_parameter("process_width").value))
         self.process_height = max(0, int(self.get_parameter("process_height").value))
         self.process_interval_ms = max(1, int(self.get_parameter("process_interval_ms").value))
+        self.max_processing_fps = max(
+            0.0, float(self.get_parameter("max_processing_fps").value)
+        )
+        self.apply_testmap_rm_alignment = bool(
+            self.get_parameter("apply_testmap_rm_alignment").value
+        )
+        self.alignment_config_path = str(
+            self.get_parameter("alignment_config_path").value
+        ).strip()
         self.brightness_gamma = float(self.get_parameter("brightness_gamma").value)
         self.brightness_bias = int(self.get_parameter("brightness_bias").value)
         self.brightness_clahe = bool(self.get_parameter("brightness_clahe").value)
@@ -140,6 +153,8 @@ class NYUSHWorldNode(Node):
         self._last_diag_log_time = 0.0
         self._latest_image_msg = None
         self._processing_image = False
+        self._last_process_started_monotonic = 0.0
+        self._last_process_duration_ms = 0.0
         self.clahe = cv2.createCLAHE(clipLimit=1.5, tileGridSize=(8, 8)) if self.brightness_clahe else None
         self.brightness_lut = self._build_brightness_lut()
 
@@ -168,6 +183,7 @@ class NYUSHWorldNode(Node):
         self._load_mapping_assets()
         self._apply_calibration_metadata()
         self._validate_mapping_configuration()
+        self._load_testmap_rm_alignment()
 
         self.car_detector = self._create_detector(
             weights_path=self._resolve_asset_path(self.get_parameter("car_engine").value),
@@ -218,7 +234,9 @@ class NYUSHWorldNode(Node):
             f"armor_roi_expand={self.armor_roi_expand_ratio:.2f}/{self.armor_roi_bottom_expand_ratio:.2f}, "
             f"debug_image={self.publish_debug_image}, debug_every_n={self.debug_image_every_n}, "
             f"process_size={self.process_width or 'camera'}x{self.process_height or 'camera'}, "
-            f"process_interval={self.process_interval_ms}ms"
+            f"process_interval={self.process_interval_ms}ms, "
+            f"max_processing_fps={'uncapped' if self.max_processing_fps <= 0.0 else f'{self.max_processing_fps:.1f}'}, "
+            f"testmap_rm_alignment={'on' if self.testmap_rm_alignment_loaded else 'off'}"
         )
 
     def _build_brightness_lut(self):
@@ -274,12 +292,20 @@ class NYUSHWorldNode(Node):
         if self._processing_image or self._latest_image_msg is None:
             return
 
+        now = time.monotonic()
+        if self.max_processing_fps > 0.0 and self._last_process_started_monotonic > 0.0:
+            min_interval_sec = 1.0 / self.max_processing_fps
+            if now - self._last_process_started_monotonic < min_interval_sec:
+                return
+
         msg = self._latest_image_msg
         self._latest_image_msg = None
         self._processing_image = True
+        self._last_process_started_monotonic = now
         try:
             self.image_callback(msg)
         finally:
+            self._last_process_duration_ms = (time.monotonic() - now) * 1000.0
             self._processing_image = False
 
     def _install_tensorrt_compat(self) -> None:
@@ -537,6 +563,94 @@ class NYUSHWorldNode(Node):
                 )
             )
 
+    def _load_testmap_rm_alignment(self) -> None:
+        self.testmap_rm_alignment_loaded = False
+        self.testmap_rm_alignment_matrix = np.eye(3, dtype=np.float64)
+        self.testmap_rm_alignment_scale = 1.0
+        self.testmap_rm_alignment_rotation_deg = 0.0
+        self.testmap_rm_alignment_translation = (0.0, 0.0)
+        self.testmap_rm_alignment_summary = "identity"
+
+        if self.map_mode != "testmap":
+            return
+        if not self.apply_testmap_rm_alignment:
+            return
+        if not self.alignment_config_path:
+            self.get_logger().warning(
+                "apply_testmap_rm_alignment=true but alignment_config_path is empty; "
+                "publishing raw testmap metric coordinates on /resolve_result."
+            )
+            return
+
+        config_path = Path(self.alignment_config_path).expanduser()
+        if not config_path.is_absolute():
+            config_path = config_path.resolve()
+        if not config_path.exists():
+            self.get_logger().warning(
+                "Testmap rm_frame alignment file does not exist: %s. "
+                "publishing raw testmap metric coordinates on /resolve_result."
+                % config_path
+            )
+            return
+
+        try:
+            with config_path.open("r", encoding="utf-8") as f:
+                data = yaml.safe_load(f) or {}
+            matrix = np.asarray(
+                data["similarity_transform"]["matrix_3x3"], dtype=np.float64
+            )
+            if matrix.shape != (3, 3):
+                raise ValueError(f"matrix_3x3 must be 3x3, got {matrix.shape}")
+
+            testmap_meta = data.get("testmap", {})
+            config_field_w = float(testmap_meta.get("field_width_m", self.field_width_m))
+            config_field_h = float(testmap_meta.get("field_height_m", self.field_height_m))
+            if (
+                abs(config_field_w - self.field_width_m) > 1e-6
+                or abs(config_field_h - self.field_height_m) > 1e-6
+            ):
+                self.get_logger().warning(
+                    "Alignment config field size %.3fx%.3fm does not match runtime %.3fx%.3fm"
+                    % (
+                        config_field_w,
+                        config_field_h,
+                        self.field_width_m,
+                        self.field_height_m,
+                    )
+                )
+
+            self.testmap_rm_alignment_matrix = matrix
+            self.testmap_rm_alignment_scale = float(
+                data.get("similarity_transform", {}).get("scale", 1.0)
+            )
+            self.testmap_rm_alignment_rotation_deg = float(
+                data.get("similarity_transform", {}).get("rotation_deg", 0.0)
+            )
+            self.testmap_rm_alignment_translation = (
+                float(data.get("similarity_transform", {}).get("translation_x_m", 0.0)),
+                float(data.get("similarity_transform", {}).get("translation_y_m", 0.0)),
+            )
+            self.testmap_rm_alignment_loaded = True
+            self.testmap_rm_alignment_summary = (
+                "scale=%.4f rot=%.2fdeg tx=%.3f ty=%.3f"
+                % (
+                    self.testmap_rm_alignment_scale,
+                    self.testmap_rm_alignment_rotation_deg,
+                    self.testmap_rm_alignment_translation[0],
+                    self.testmap_rm_alignment_translation[1],
+                )
+            )
+            self.get_logger().info(
+                "Loaded testmap rm_frame alignment: %s (%s)"
+                % (config_path, self.testmap_rm_alignment_summary)
+            )
+        except Exception as exc:
+            self.get_logger().warning(
+                "Failed to load testmap rm_frame alignment %s: %s. "
+                "publishing raw testmap metric coordinates on /resolve_result."
+                % (config_path, exc)
+            )
+
     def _mapped_point_to_display(self, mapped_point: np.ndarray):
         map_x = float(mapped_point[0][0][0])
         map_y = float(mapped_point[0][0][1])
@@ -603,13 +717,67 @@ class NYUSHWorldNode(Node):
         world_y_m = float(world_y_px) * self.field_height_m / float(self.map_height)
         return world_x_m, world_y_m
 
-    def _publish_debug_map(self, world_result: DetectResult):
+    def _apply_testmap_rm_alignment_point(self, world_x_m: float, world_y_m: float):
+        if not self.testmap_rm_alignment_loaded:
+            return float(world_x_m), float(world_y_m)
+        point = np.array([world_x_m, world_y_m, 1.0], dtype=np.float64)
+        aligned = self.testmap_rm_alignment_matrix @ point
+        return float(aligned[0]), float(aligned[1])
+
+    def _copy_and_align_world_result(self, raw_world_result: DetectResult):
+        aligned_world_result = DetectResult()
+        aligned_world_result.header = raw_world_result.header
+        aligned_world_result.blue_x = np.array(raw_world_result.blue_x, dtype=np.float32, copy=True)
+        aligned_world_result.blue_y = np.array(raw_world_result.blue_y, dtype=np.float32, copy=True)
+        aligned_world_result.red_x = np.array(raw_world_result.red_x, dtype=np.float32, copy=True)
+        aligned_world_result.red_y = np.array(raw_world_result.red_y, dtype=np.float32, copy=True)
+
+        if not self.testmap_rm_alignment_loaded:
+            return aligned_world_result
+
+        for xs, ys in (
+            (aligned_world_result.red_x, aligned_world_result.red_y),
+            (aligned_world_result.blue_x, aligned_world_result.blue_y),
+        ):
+            for i in range(len(xs)):
+                if xs[i] == 0.0 and ys[i] == 0.0:
+                    continue
+                xs[i], ys[i] = self._apply_testmap_rm_alignment_point(xs[i], ys[i])
+        return aligned_world_result
+
+    def _publish_debug_map(self, raw_world_result: DetectResult):
         if self.debug_map_pub is None:
             return
 
         debug_map = self.map_image.copy()
         scale_x = float(self.map_width) / self.field_width_m
         scale_y = float(self.map_height) / self.field_height_m
+        overlay_note = "Overlay=testmap raw"
+        if self.testmap_rm_alignment_loaded:
+            overlay_note += " | /resolve_result=aligned rm_frame"
+        elif self.apply_testmap_rm_alignment and self.map_mode == "testmap":
+            overlay_note += " | /resolve_result alignment requested but unavailable"
+        cv2.putText(
+            debug_map,
+            overlay_note,
+            (12, 26),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.65,
+            (255, 255, 255),
+            2,
+            cv2.LINE_AA,
+        )
+        if self.testmap_rm_alignment_loaded:
+            cv2.putText(
+                debug_map,
+                self.testmap_rm_alignment_summary,
+                (12, 54),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.55,
+                (210, 255, 210),
+                2,
+                cv2.LINE_AA,
+            )
 
         def draw_points(xs, ys, color, prefix):
             for idx, (x_m, y_m) in enumerate(zip(xs, ys), start=1):
@@ -628,8 +796,8 @@ class NYUSHWorldNode(Node):
                     2,
                 )
 
-        draw_points(world_result.red_x, world_result.red_y, (0, 0, 255), "R")
-        draw_points(world_result.blue_x, world_result.blue_y, (255, 0, 0), "B")
+        draw_points(raw_world_result.red_x, raw_world_result.red_y, (0, 0, 255), "R")
+        draw_points(raw_world_result.blue_x, raw_world_result.blue_y, (255, 0, 0), "B")
 
         map_msg = self.bridge.cv2_to_imgmsg(debug_map, "bgr8")
         self.debug_map_pub.publish(map_msg)
@@ -689,7 +857,8 @@ class NYUSHWorldNode(Node):
 
         status_msg = (
             "NYUSH status: cars=%d, armors=%d, armor_retry_hits=%d, tracks_ready=%d, tracks_pending=%d, "
-            "resolve_nonzero=%d, window_size=%d, max_inactive_time=%.1fs, car_conf=%.2f, armor_conf=%.2f"
+            "resolve_nonzero=%d, window_size=%d, max_inactive_time=%.1fs, car_conf=%.2f, armor_conf=%.2f, "
+            "process_ms=%.1f, max_processing_fps=%s"
             % (
                 car_count,
                 armor_count,
@@ -701,6 +870,8 @@ class NYUSHWorldNode(Node):
                 self.max_inactive_time,
                 self.car_conf,
                 self.armor_conf,
+                self._last_process_duration_ms,
+                "uncapped" if self.max_processing_fps <= 0.0 else f"{self.max_processing_fps:.1f}",
             )
         )
 
@@ -811,12 +982,12 @@ class NYUSHWorldNode(Node):
                         )
                         cv2.circle(debug_frame, (int(center_x), int(center_y)), 4, label_color, -1)
 
-            world_result = DetectResult()
-            world_result.header.stamp = msg.header.stamp
-            world_result.blue_x = [0.0] * 6
-            world_result.blue_y = [0.0] * 6
-            world_result.red_x = [0.0] * 6
-            world_result.red_y = [0.0] * 6
+            raw_world_result = DetectResult()
+            raw_world_result.header.stamp = msg.header.stamp
+            raw_world_result.blue_x = [0.0] * 6
+            raw_world_result.blue_y = [0.0] * 6
+            raw_world_result.red_x = [0.0] * 6
+            raw_world_result.red_y = [0.0] * 6
 
             filtered_tracks = self.filter.get_all_data()
             for cls_name, pixel_xy in filtered_tracks.items():
@@ -828,12 +999,13 @@ class NYUSHWorldNode(Node):
 
                 world_x_m, world_y_m = self._map_pixel_to_world(pixel_xy[0], pixel_xy[1])
                 if cls_name.startswith("B"):
-                    world_result.blue_x[index] = world_x_m
-                    world_result.blue_y[index] = world_y_m
+                    raw_world_result.blue_x[index] = world_x_m
+                    raw_world_result.blue_y[index] = world_y_m
                 elif cls_name.startswith("R"):
-                    world_result.red_x[index] = world_x_m
-                    world_result.red_y[index] = world_y_m
+                    raw_world_result.red_x[index] = world_x_m
+                    raw_world_result.red_y[index] = world_y_m
 
+            world_result = self._copy_and_align_world_result(raw_world_result)
             self.resolve_pub.publish(world_result)
             self._maybe_log_detection_status(
                 car_count=car_count,
@@ -849,7 +1021,7 @@ class NYUSHWorldNode(Node):
                 debug_msg.header = msg.header
                 self.debug_image_pub.publish(debug_msg)
 
-            self._publish_debug_map(world_result)
+            self._publish_debug_map(raw_world_result)
         except Exception as exc:
             self.get_logger().error(f"NYUSH world callback failed: {exc}")
 

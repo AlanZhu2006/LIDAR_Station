@@ -1,4 +1,4 @@
-# Dependency Checklist (T-DT-2024-Radar)
+# Dependency Checklist (RadarStation)
 
 Use this checklist to resolve runtime/build dependencies before full bring-up.
 
@@ -152,7 +152,7 @@ Mark complete only when all are true:
 - Verified toolchain: NVIDIA driver + CUDA + TensorRT `trtexec`.
 - Verified workspace build: `vision_interface`, `rosbag_player`, `tdt_vision` all build successfully.
 - Verified runtime launch with real recovered bag directory:
-  - `/home/nyu/Desktop/T-DT-2024-Radar/bag_recovered`
+  - `/home/nyu/Desktop/RadarStation/bag_recovered`
   - `rosbag_player` storage error resolved.
 - Important caveat:
   - recovered bag currently has zero message counts after corruption recovery.

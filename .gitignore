@@ -4,6 +4,7 @@ install/
 .cache/
 
 config/merged_bag/*
+config/local/
 
 *.engine
 

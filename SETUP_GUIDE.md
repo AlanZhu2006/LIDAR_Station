@@ -1,4 +1,4 @@
-# T-DT-2024-Radar 快速配置指南
+# RadarStation 快速配置指南
 
 > 详细文档请参阅 [README.md](./README.md)
 
@@ -18,7 +18,7 @@
 ### 编译
 
 ```bash
-cd ~/Desktop/T-DT-2024-Radar
+cd ~/Desktop/RadarStation
 source /opt/ros/humble/setup.bash
 colcon build
 ```
@@ -40,7 +40,7 @@ cp onnx_tensorrt/NvOnnxParser.h tensorrt_headers/include/
 
 ```bash
 # 终端 1 - 点云处理
-cd ~/Desktop/T-DT-2024-Radar && source install/setup.bash
+cd ~/Desktop/RadarStation && source install/setup.bash
 LD_PRELOAD=/lib/x86_64-linux-gnu/libusb-1.0.so.0 ros2 launch dynamic_cloud lidar.launch.py
 
 # 终端 2 - rosbag 回放
@@ -54,7 +54,7 @@ rviz2
 
 ```bash
 # 终端 1 - 相机驱动
-cd ~/Desktop/T-DT-2024-Radar && source install/setup.bash
+cd ~/Desktop/RadarStation && source install/setup.bash
 ros2 run hik_camera hik_camera_node
 
 # 终端 2 - NYUSH 检测
@@ -69,7 +69,7 @@ ros2 run rqt_image_view rqt_image_view  # 选择 /detect_image
 ```bash
 # 终端 1 - 雷达驱动
 sudo ip addr add 192.168.1.5/24 dev enp4s0
-cd ~/Desktop/T-DT-2024-Radar && source install/setup.bash
+cd ~/Desktop/RadarStation && source install/setup.bash
 ros2 launch livox_ros_driver2 msg_MID360_launch.py
 
 # 终端 2 - 点云处理

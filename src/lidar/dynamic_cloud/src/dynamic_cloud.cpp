@@ -4,6 +4,7 @@
 #include <pcl/filters/voxel_grid.h>
 #include <pcl/common/transforms.h>
 #include <rclcpp/time.hpp>
+#include <algorithm>
 #include <tf2/exceptions.h>
 namespace tdt_radar{
 DynamicCloud::DynamicCloud(const rclcpp::NodeOptions& node_options):rclcpp::Node("dynamic_cloud_node",node_options),tf_buffer_(this->get_clock()),tf_listener_(tf_buffer_)
@@ -16,6 +17,7 @@ DynamicCloud::DynamicCloud(const rclcpp::NodeOptions& node_options):rclcpp::Node
     this->declare_parameter<double>("kd_tree_threshold_sq", 0.28);
     this->declare_parameter<int>("process_every_n", 1);
     this->declare_parameter<int>("accumulate_time", 3);
+    this->declare_parameter<bool>("publish_accumulated_dynamic_cloud", true);
     std::string map_file;
     std::string point_cloud_topic;
     this->get_parameter("map_file", map_file);
@@ -26,6 +28,7 @@ DynamicCloud::DynamicCloud(const rclcpp::NodeOptions& node_options):rclcpp::Node
     this->get_parameter("kd_tree_threshold_sq", kd_tree_threshold_sq_);
     this->get_parameter("process_every_n", process_every_n_);
     this->get_parameter("accumulate_time", accumulate_time);
+    this->get_parameter("publish_accumulated_dynamic_cloud", publish_accumulated_dynamic_cloud_);
     auto temp_cloud = pcl::PointCloud<pcl::PointXYZ>::Ptr(new pcl::PointCloud<pcl::PointXYZ>);
     if (pcl::io::loadPCDFile<pcl::PointXYZ>(map_file, *temp_cloud) == -1)
     {
@@ -58,10 +61,12 @@ void DynamicCloud::GetDynamicCloud(pcl::PointCloud<pcl::PointXYZ> &input_cloud,p
     std::vector<pcl::PointCloud<pcl::PointXYZ>> clouds(thread_num);
     auto start=std::chrono::system_clock::now();
     int cloud_size=input_cloud.points.size();
-    int step=cloud_size/thread_num;
+    int step=(cloud_size + thread_num - 1)/thread_num;
     for(int i=0;i<thread_num;i++){
         threads.push_back(std::thread([i,step,cloud_size,&clouds,&input_cloud,this,threshold_sq,K](){
-            for(int j=i*step;j<(i+1)*step;j++){
+            int start = i * step;
+            int end = std::min(start + step, cloud_size);
+            for(int j = start; j < end; j++){
                 std::vector<int> pointIdxNKNSearch(K);
                 std::vector<float> pointNKNSquaredDistance(K);
                 if(kd_Tree.nearestKSearch(input_cloud.points[j],K,pointIdxNKNSearch,pointNKNSquaredDistance)>0){
@@ -278,14 +283,18 @@ void DynamicCloud::callback(const sensor_msgs::msg::PointCloud2::SharedPtr msg)
     }//因为other的点少，就先累积再处理
     ta = std::chrono::steady_clock::now();
     sensor_msgs::msg::PointCloud2 output;
+    pcl::PointCloud<pcl::PointXYZ> dynamic_cloud_to_publish =
+        publish_accumulated_dynamic_cloud_ ? accumulated_cloud : dynamic_pointcloud;
     accumulated_cloud.header.frame_id = "rm_frame";
     other_accumulated_cloud.header.frame_id = "rm_frame";
-    pcl::toROSMsg(accumulated_cloud, output);
+    dynamic_cloud_to_publish.header.frame_id = "rm_frame";
+    pcl::toROSMsg(dynamic_cloud_to_publish, output);
     output.header.frame_id = "rm_frame";
     output.header.stamp = msg->header.stamp;
     pub_->publish(output);
     RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 2000,
-        "dynamic: filtered=%zu -> dyn=%zu -> accum=%zu", filtered_cloud.size(), dynamic_pointcloud.size(), accumulated_cloud.size());
+        "dynamic: filtered=%zu -> dyn=%zu -> pub=%zu -> accum=%zu",
+        filtered_cloud.size(), dynamic_pointcloud.size(), dynamic_cloud_to_publish.size(), accumulated_cloud.size());
 
     pcl::toROSMsg(other_accumulated_cloud, output);
     other_pub_->publish(output);

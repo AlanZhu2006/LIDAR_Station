@@ -67,10 +67,10 @@ LD_LIBRARY_PATH=/opt/MVS/bin:/opt/MVS/lib/64:/opt/MVS/lib/32:$LD_LIBRARY_PATH /o
 
 ## Useful Known-Good Commands
 ```bash
-cd /home/nyu/Desktop/T-DT-2024-Radar
+cd /home/nyu/Desktop/RadarStation
 source /opt/ros/humble/setup.zsh
 source install/setup.zsh
-ros2 launch tdt_vision run_rosbag.launch.py rosbag_file:=/home/nyu/Desktop/T-DT-2024-Radar/bag_recovered
+ros2 launch tdt_vision run_rosbag.launch.py rosbag_file:=/home/nyu/Desktop/RadarStation/bag_recovered
 ```
 
 ```bash

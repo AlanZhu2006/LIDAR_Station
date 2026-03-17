@@ -7,6 +7,7 @@
 #include <rclcpp/time.hpp>
 #include <vector>
 #include <cmath>
+#include <algorithm>
 #include <rclcpp/rclcpp.hpp>
 #pragma once
 
@@ -199,6 +200,13 @@ public:
         return out;
     }
 
+    double get_history_time_span() const {
+        if (history.size() < 2) {
+            return 0.0;
+        }
+        return history.back().first - history.front().first;
+    }
+
     bool is_stationary(float displacement_thresh = 0.15f, float min_time_span = 1.5f, size_t min_history = 12) const {
         if (history.size() < min_history) return false;
         double t_span = history.back().first - history.front().first;
@@ -207,6 +215,32 @@ public:
         float dy = history.back().second.y - history.front().second.y;
         float dis = std::sqrt(dx*dx + dy*dy);
         return dis < displacement_thresh;
+    }
+
+    bool is_confirmed_moving(
+        float displacement_thresh = 0.25f,
+        float min_time_span = 0.6f,
+        size_t min_history = 6,
+        float min_avg_speed = 0.15f) const {
+        if (history.size() < min_history) {
+            return false;
+        }
+
+        size_t start_index = history.size() > min_history ? history.size() - min_history : 0;
+        double t_span = history.back().first - history[start_index].first;
+        if (t_span < min_time_span) {
+            return false;
+        }
+
+        float dx = history.back().second.x - history[start_index].second.x;
+        float dy = history.back().second.y - history[start_index].second.y;
+        float displacement = std::sqrt(dx * dx + dy * dy);
+        float avg_speed = displacement / std::max(static_cast<float>(t_span), 1e-3f);
+        return displacement >= displacement_thresh && avg_speed >= min_avg_speed;
+    }
+
+    bool is_classified() const {
+        return !detect_history.empty();
     }
 
     bool match(pcl::PointXY &input) {

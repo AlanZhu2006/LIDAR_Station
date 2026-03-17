@@ -74,6 +74,12 @@ KalmanFilter::KalmanFilter(const rclcpp::NodeOptions& node_options):rclcpp::Node
     this->declare_parameter<double>("camera_detect_radius", 1.0);
     this->declare_parameter<double>("track_match_radius", 1.0);
     this->declare_parameter<bool>("publish_stationary_targets", false);
+    this->declare_parameter<bool>("publish_unclassified_targets", true);
+    this->declare_parameter<int>("min_unclassified_history", 2);
+    this->declare_parameter<double>("min_motion_displacement", 0.12);
+    this->declare_parameter<double>("min_motion_time_span", 0.25);
+    this->declare_parameter<int>("min_motion_history", 3);
+    this->declare_parameter<double>("min_motion_speed", 0.08);
     sub_ = this->create_subscription<sensor_msgs::msg::PointCloud2>(
         "/livox/lidar_cluster",
         rclcpp::SensorDataQoS(),
@@ -142,6 +148,14 @@ void KalmanFilter::callback(const sensor_msgs::msg::PointCloud2::SharedPtr msg)
     float detect_r = static_cast<float>(this->get_parameter("camera_detect_radius").as_double());
     float track_r = static_cast<float>(this->get_parameter("track_match_radius").as_double());
     bool publish_stationary_targets = this->get_parameter("publish_stationary_targets").as_bool();
+    bool publish_unclassified_targets = this->get_parameter("publish_unclassified_targets").as_bool();
+    int min_unclassified_history_param = static_cast<int>(this->get_parameter("min_unclassified_history").as_int());
+    size_t min_unclassified_history = static_cast<size_t>(min_unclassified_history_param >= 1 ? min_unclassified_history_param : 1);
+    float min_motion_displacement = static_cast<float>(this->get_parameter("min_motion_displacement").as_double());
+    float min_motion_time_span = static_cast<float>(this->get_parameter("min_motion_time_span").as_double());
+    int min_motion_history_param = static_cast<int>(this->get_parameter("min_motion_history").as_int());
+    size_t min_motion_history = static_cast<size_t>(min_motion_history_param >= 2 ? min_motion_history_param : 2);
+    float min_motion_speed = static_cast<float>(this->get_parameter("min_motion_speed").as_double());
     auto now_time = std::chrono::steady_clock::now();
     pcl::PointCloud<pcl::PointXYZ>::Ptr cloud(new pcl::PointCloud<pcl::PointXYZ>);
     pcl::PointCloud<pcl::PointXY>::Ptr cloud_xy(new pcl::PointCloud<pcl::PointXY>);
@@ -229,7 +243,7 @@ void KalmanFilter::callback(const sensor_msgs::msg::PointCloud2::SharedPtr msg)
             &max_time_diff_fail);
     }
     pcl::PointCloud<pcl::PointXYZRGB>::Ptr cloud_filtered(new pcl::PointCloud<pcl::PointXYZRGB>);
-    int stationary_filtered = 0;
+    int suppressed_unclassified = 0;
     int published_points = 0;
     for(int i = KFs.size() - 1; i >= 0; i--)
     {
@@ -239,10 +253,11 @@ void KalmanFilter::callback(const sensor_msgs::msg::PointCloud2::SharedPtr msg)
         }
         else
         {
-            bool stationary = KFs[i].is_stationary();
-            if (stationary && !publish_stationary_targets) {
-                stationary_filtered++;
-                continue;  // 静止目标默认不发布
+            bool classified = KFs[i].is_classified();
+            if (!classified &&
+                (!publish_unclassified_targets || KFs[i].history.size() < min_unclassified_history)) {
+                suppressed_unclassified++;
+                continue;
             }
             pcl::PointXYZRGB point{};
             pcl::PointXY out_pt = KFs[i].get_output_point();
@@ -286,8 +301,7 @@ void KalmanFilter::callback(const sensor_msgs::msg::PointCloud2::SharedPtr msg)
     detect_msg.header.stamp = msg->header.stamp;
     for(auto kf : KFs)
     {
-        if(kf.detect_history.size()==0)continue;
-        if(kf.is_stationary() && !publish_stationary_targets)continue;
+        if(!kf.is_classified())continue;
         pcl::PointXY out_pt = kf.get_output_point();
         if(kf.get_color() == 0)//蓝色
         {
@@ -335,11 +349,16 @@ void KalmanFilter::callback(const sensor_msgs::msg::PointCloud2::SharedPtr msg)
             //工程赋值
         }
     }
-    if (debug && (published_points > 0 || stationary_filtered > 0 || !KFs.empty())) {
+    if (debug && (published_points > 0 || suppressed_unclassified > 0 || !KFs.empty())) {
         RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 2000,
-            "kalman_publish: total_kfs=%zu, published=%d, stationary_filtered=%d, publish_stationary_targets=%s, detect_callbacks=%lu, resolve_nonzero=%d, red_matched=%d, blue_matched=%d, camera_r=%.2f, track_r=%.2f",
-            KFs.size(), published_points, stationary_filtered, publish_stationary_targets ? "true" : "false",
-            detect_callback_count_, resolve_nonzero, red_matched, blue_matched, detect_r, track_r);
+            "kalman_publish: total_kfs=%zu, published=%d, suppressed_unclassified=%d, publish_stationary_targets=%s, publish_unclassified_targets=%s, min_unclassified_history=%zu, detect_callbacks=%lu, resolve_nonzero=%d, red_matched=%d, blue_matched=%d, motion(dis=%.2f,time=%.2f,hist=%zu,speed=%.2f), camera_r=%.2f, track_r=%.2f",
+            KFs.size(), published_points, suppressed_unclassified,
+            publish_stationary_targets ? "true" : "false",
+            publish_unclassified_targets ? "true" : "false",
+            min_unclassified_history,
+            detect_callback_count_, resolve_nonzero, red_matched, blue_matched,
+            min_motion_displacement, min_motion_time_span, min_motion_history, min_motion_speed,
+            detect_r, track_r);
         if (has_cached_detect && resolve_nonzero > 0 && red_matched == 0 && blue_matched == 0 && !KFs.empty()) {
             RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 2000,
                 "camera_match 无匹配: 最近距离=%.2fm(需<%.2fm), 最大时间差=%.2fs(需<1s), detect_callbacks=%lu",

@@ -131,7 +131,7 @@ Normalized the `tdt_vision` bring-up flow so launch scripts, runtime paths, map 
   - `bag_recovered/metadata.yaml`
 
 4. Relaunch with recovered bag directory:
-- `ros2 launch tdt_vision run_rosbag.launch.py rosbag_file:=/home/nyu/Desktop/T-DT-2024-Radar/bag_recovered`
+- `ros2 launch tdt_vision run_rosbag.launch.py rosbag_file:=/home/nyu/Desktop/RadarStation/bag_recovered`
 
 ### Verification Outcome
 - `radar_detect_node` loaded successfully.
@@ -169,7 +169,7 @@ Normalized the `tdt_vision` bring-up flow so launch scripts, runtime paths, map 
 - `metadata.yaml` generated successfully.
 
 4. Launch with recovered bag directory:
-- `ros2 launch tdt_vision run_rosbag.launch.py rosbag_file:=/home/nyu/Desktop/T-DT-2024-Radar/bag_recovered`
+- `ros2 launch tdt_vision run_rosbag.launch.py rosbag_file:=/home/nyu/Desktop/RadarStation/bag_recovered`
 - Storage plugin error resolved and process reported clean finish.
 
 ### New Finding After Bag Recovery
@@ -207,7 +207,7 @@ Normalized the `tdt_vision` bring-up flow so launch scripts, runtime paths, map 
 ## 2026-02-27 End-of-Day Delta (Post Snapshot)
 
 ### Additional Observations
-- `ros2 bag info /home/nyu/Desktop/T-DT-2024-Radar/bag_recovered` confirms all tracked topics currently have `Count: 0`.
+- `ros2 bag info /home/nyu/Desktop/RadarStation/bag_recovered` confirms all tracked topics currently have `Count: 0`.
 - New local recording `bag_new3` is valid (`sqlite3`) but only includes `/livox/lidar` (no camera image topic).
 - Topic checks during runtime showed missing camera feed path for detect pipeline:
   - `/detect_result` not published.

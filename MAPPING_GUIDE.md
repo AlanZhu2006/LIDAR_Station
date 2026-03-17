@@ -16,7 +16,7 @@ sudo apt install -y ros-humble-pcl-ros libpcl-dev libeigen3-dev
 ## 2. 编译建图工作空间
 
 ```bash
-cd ~/Desktop/T-DT-2024-Radar/mapping_ws
+cd ~/Desktop/RadarStation/mapping_ws
 source /opt/ros/humble/setup.bash
 colcon build --symlink-install --cmake-args -DCMAKE_BUILD_TYPE=Release
 source install/setup.bash
@@ -44,7 +44,7 @@ ping 192.168.1.114
 
 **终端 1**:
 ```bash
-cd ~/Desktop/T-DT-2024-Radar
+cd ~/Desktop/RadarStation
 source install/setup.bash
 ros2 launch livox_ros_driver2 msg_MID360_launch.py
 ```
@@ -53,7 +53,7 @@ ros2 launch livox_ros_driver2 msg_MID360_launch.py
 
 **终端 2**:
 ```bash
-cd ~/Desktop/T-DT-2024-Radar/mapping_ws
+cd ~/Desktop/RadarStation/mapping_ws
 source /opt/ros/humble/setup.bash
 source install/setup.bash
 ros2 launch fast_lio mapping.launch.py config_file:=mid360.yaml
@@ -78,7 +78,7 @@ rviz2
 
 按 `Ctrl+C` 停止 FAST-LIO，点云自动保存到：
 ```
-~/Desktop/T-DT-2024-Radar/mapping_ws/src/FAST_LIO/PCD/scans.pcd
+~/Desktop/RadarStation/mapping_ws/src/FAST_LIO/PCD/scans.pcd
 ```
 
 ---
@@ -87,13 +87,13 @@ rviz2
 
 ### 查看点云
 ```bash
-pcl_viewer ~/Desktop/T-DT-2024-Radar/mapping_ws/src/FAST_LIO/PCD/scans.pcd
+pcl_viewer ~/Desktop/RadarStation/mapping_ws/src/FAST_LIO/PCD/scans.pcd
 ```
 
 ### 复制到项目 config 目录
 ```bash
-cp ~/Desktop/T-DT-2024-Radar/mapping_ws/src/FAST_LIO/PCD/scans.pcd \
-   ~/Desktop/T-DT-2024-Radar/config/RM2024.pcd
+cp ~/Desktop/RadarStation/mapping_ws/src/FAST_LIO/PCD/scans.pcd \
+   ~/Desktop/RadarStation/config/RM2024.pcd
 ```
 
 ---

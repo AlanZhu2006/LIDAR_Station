@@ -106,6 +106,8 @@ install(
 
 # 安装 Python 检测脚本
 install(
-    PROGRAMS detect/scripts/nyush_detect_node.py
+    PROGRAMS
+    detect/scripts/nyush_detect_node.py
+    detect/scripts/nyush_world_node.py
     DESTINATION lib/${PROJECT_NAME}
 )

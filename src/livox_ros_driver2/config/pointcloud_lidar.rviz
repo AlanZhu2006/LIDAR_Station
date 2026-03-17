@@ -8,6 +8,8 @@ Panels:
         - /Status1
         - /PointCloud22/Topic1
         - /PointCloud23
+        - /Camera Image1/Topic1
+        - /Detect Image1/Topic1
       Splitter Ratio: 0.5
     Tree Height: 874
   - Class: rviz_common/Selection
@@ -54,14 +56,14 @@ Visualization Manager:
       Class: rviz_default_plugins/PointCloud2
       Color: 255; 255; 255
       Color Transformer: Intensity
-      Decay Time: 0.20000000298023224
+      Decay Time: 0
       Enabled: true
       Invert Rainbow: false
       Max Color: 255; 255; 255
       Max Intensity: 151
       Min Color: 26; 95; 180
       Min Intensity: 0
-      Name: PointCloud2
+      Name: Lidar
       Position Transformer: XYZ
       Selectable: true
       Size (Pixels): 3
@@ -72,7 +74,7 @@ Visualization Manager:
         Durability Policy: Volatile
         Filter size: 10
         History Policy: Keep Last
-        Reliability Policy: Reliable
+        Reliability Policy: Best Effort
         Value: /livox/lidar
       Use Fixed Frame: true
       Use rainbow: false
@@ -106,7 +108,7 @@ Visualization Manager:
         Durability Policy: Volatile
         Filter size: 10
         History Policy: Keep Last
-        Reliability Policy: Reliable
+        Reliability Policy: Best Effort
         Value: /livox/lidar_dynamic
       Use Fixed Frame: true
       Use rainbow: false
@@ -140,7 +142,7 @@ Visualization Manager:
         Durability Policy: Volatile
         Filter size: 10
         History Policy: Keep Last
-        Reliability Policy: Reliable
+        Reliability Policy: Best Effort
         Value: /livox/lidar_cluster
       Use Fixed Frame: true
       Use rainbow: true
@@ -163,26 +165,72 @@ Visualization Manager:
       Max Intensity: 4096
       Min Color: 0; 0; 0
       Min Intensity: 0
-      Name: PointCloud2
+      Name: Kalman 跟踪 (红/蓝/灰)
       Position Transformer: XYZ
       Selectable: true
       Size (Pixels): 3
-      Size (m): 0.15000000596046448
+      Size (m): 0.20000000298023224
       Style: Flat Squares
       Topic:
         Depth: 5
         Durability Policy: Volatile
         Filter size: 10
         History Policy: Keep Last
-        Reliability Policy: Reliable
+        Reliability Policy: Best Effort
         Value: /livox/lidar_kalman
       Use Fixed Frame: true
       Use rainbow: true
       Value: true
+    - Alpha: 0.8
+      Class: rviz_default_plugins/PointCloud2
+      Color: 150; 150; 150
+      Color Transformer: FlatColor
+      Decay Time: 0
+      Enabled: true
+      Name: Map
+      Size (m): 0.05
+      Style: Flat Squares
+      Topic:
+        Depth: 10
+        Durability Policy: Volatile
+        Filter size: 30
+        History Policy: Keep Last
+        Reliability Policy: Best Effort
+        Value: /livox/map
+      Use Fixed Frame: true
+      Value: true
+    - Class: rviz_default_plugins/Image
+      Enabled: true
+      Max Value: 1
+      Median window: 5
+      Min Value: 0
+      Name: Camera Image
+      Normalize Range: true
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Best Effort
+        Value: /camera_image
+      Value: true
+    - Class: rviz_default_plugins/Image
+      Enabled: true
+      Max Value: 1
+      Median window: 5
+      Min Value: 0
+      Name: Detect Image
+      Normalize Range: true
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Best Effort
+        Value: /detect_image
+      Value: true
   Enabled: true
   Global Options:
     Background Color: 48; 48; 48
-    Fixed Frame: livox_frame
+    Fixed Frame: rm_frame_display
     Frame Rate: 30
   Name: root
   Tools:

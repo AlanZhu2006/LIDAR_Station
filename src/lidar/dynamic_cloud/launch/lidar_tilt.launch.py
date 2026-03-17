@@ -27,9 +27,11 @@ def generate_launch_description():
     cluster_tolerance = LaunchConfiguration('cluster_tolerance', default='0.25')
     min_cluster_size = LaunchConfiguration('min_cluster_size', default='12')
     max_cluster_size = LaunchConfiguration('max_cluster_size', default='1000')
+    cluster_voxel_leaf_size = LaunchConfiguration('cluster_voxel_leaf_size', default='0.0')
     auto_align = LaunchConfiguration('auto_align', default='true')
     debug_camera_match = LaunchConfiguration('debug_camera_match', default='false')
     camera_detect_radius = LaunchConfiguration('camera_detect_radius', default='1.0')
+    track_match_radius = LaunchConfiguration('track_match_radius', default='1.0')
     publish_stationary_targets = LaunchConfiguration('publish_stationary_targets', default='false')
     lidar_pitch_rad = PythonExpression(['(', lidar_pitch_deg, ') * 3.141592653589793 / 180.0'])
 
@@ -67,12 +69,14 @@ def generate_launch_description():
             'cluster_tolerance': cluster_tolerance,
             'min_cluster_size': min_cluster_size,
             'max_cluster_size': max_cluster_size,
+            'cluster_voxel_leaf_size': cluster_voxel_leaf_size,
             'point_cloud_topic': '/livox/lidar_corrected',
             'point_cloud_frame_id': 'livox_frame_ground',
             'tf_child_frame': 'livox_frame',
             'auto_align': auto_align,
             'debug_camera_match': debug_camera_match,
             'camera_detect_radius': camera_detect_radius,
+            'track_match_radius': track_match_radius,
             'publish_stationary_targets': publish_stationary_targets,
         }.items(),
     )
@@ -88,11 +92,13 @@ def generate_launch_description():
         DeclareLaunchArgument('cluster_tolerance', default_value='0.25', description='欧式聚类距离阈值'),
         DeclareLaunchArgument('min_cluster_size', default_value='12', description='最小聚类点数'),
         DeclareLaunchArgument('max_cluster_size', default_value='1000', description='最大聚类点数'),
+        DeclareLaunchArgument('cluster_voxel_leaf_size', default_value='0.0', description='聚类前体素降采样大小，0表示关闭'),
         DeclareLaunchArgument('use_tilt_correction', default_value='true', description='启用倾斜修正'),
         DeclareLaunchArgument('lidar_pitch_deg', default_value='50.0', description='雷达向前倾角度数'),
         DeclareLaunchArgument('auto_align', default_value='true', description='自动校正 RViz 显示地平面'),
         DeclareLaunchArgument('debug_camera_match', default_value='false', description='启用融合匹配调试日志'),
         DeclareLaunchArgument('camera_detect_radius', default_value='1.0', description='相机-雷达匹配半径（米）'),
+        DeclareLaunchArgument('track_match_radius', default_value='1.0', description='LiDAR Kalman 轨迹关联半径（米）'),
         DeclareLaunchArgument('publish_stationary_targets', default_value='false', description='调试时是否发布静止目标到 /livox/lidar_kalman'),
         static_tf,
         pointcloud_transform_node,

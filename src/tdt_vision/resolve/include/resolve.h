@@ -30,6 +30,8 @@ class Resolve final : public rclcpp::Node {
   parser* parser_;
   int EnemyColor=1;
   cv::Mat minimap;
+  double field_width_m_ = 3.82;
+  double field_height_m_ = 6.79;
   int markers[6];
   int16_t match_time;
   uint8_t robot_hp[16];

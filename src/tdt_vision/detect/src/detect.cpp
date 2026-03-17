@@ -283,9 +283,19 @@ void Detect::callback(const std::shared_ptr<sensor_msgs::msg::Image> msg) {
     car.color=getColor(max_mat);
     car.center=cv::Point2f(max_rect.x+max_rect.width/2,max_rect.y+max_rect.height/2);
     // car.center_rect=cv::Rect(car.center.x-10,car.center.y-10,20,20);
+    int detect_index = -1;
+    if (car.number == 7) {
+      detect_index = 5;
+    } else if (car.number >= 1 && car.number <= 6) {
+      detect_index = car.number - 1;
+    }
+    if (detect_index < 0) {
+      continue;
+    }
+
     if(car.color==0){
-        detect_result.blue_x[car.number-1]=car.center.x;
-        detect_result.blue_y[car.number-1]=car.center.y;
+        detect_result.blue_x[detect_index]=car.center.x;
+        detect_result.blue_y[detect_index]=car.center.y;
         //如果只有一个为0，打印error
         if(car.center.x*car.center.y==0&&car.number!=0){
           RCLCPP_ERROR(this->get_logger(), "Error: blue car center is 0");
@@ -296,8 +306,8 @@ void Detect::callback(const std::shared_ptr<sensor_msgs::msg::Image> msg) {
         }
     }
     if(car.color==2){
-        detect_result.red_x[car.number-1]=car.center.x;
-        detect_result.red_y[car.number-1]=car.center.y;
+        detect_result.red_x[detect_index]=car.center.x;
+        detect_result.red_y[detect_index]=car.center.y;
         //如果只有一个为0，打印error
         if(car.center.x*car.center.y==0&&car.number!=0){
           RCLCPP_ERROR(this->get_logger(), "Error: red car center is 0");

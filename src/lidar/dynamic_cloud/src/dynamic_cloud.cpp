@@ -4,33 +4,55 @@
 #include <pcl/filters/voxel_grid.h>
 #include <pcl/common/transforms.h>
 #include <rclcpp/time.hpp>
+#include <tf2/exceptions.h>
 namespace tdt_radar{
 DynamicCloud::DynamicCloud(const rclcpp::NodeOptions& node_options):rclcpp::Node("dynamic_cloud_node",node_options),tf_buffer_(this->get_clock()),tf_listener_(tf_buffer_)
 {
     RCLCPP_INFO(this->get_logger(), "Dynamic_cloud Node start");
-    //从pcd读取map
+    this->declare_parameter<std::string>("map_file", "config/RM2024.pcd");
+    this->declare_parameter<std::string>("point_cloud_topic", "/livox/lidar");
+    this->declare_parameter<double>("ceiling_z_max", 100.0);
+    this->declare_parameter<double>("voxel_leaf_size", 0.25);
+    this->declare_parameter<double>("kd_tree_threshold_sq", 0.28);
+    this->declare_parameter<int>("process_every_n", 1);
+    this->declare_parameter<int>("accumulate_time", 3);
+    std::string map_file;
+    std::string point_cloud_topic;
+    this->get_parameter("map_file", map_file);
+    this->get_parameter("point_cloud_topic", point_cloud_topic);
+    this->get_parameter("ceiling_z_max", ceiling_z_max_);
+    double voxel_leaf;
+    this->get_parameter("voxel_leaf_size", voxel_leaf);
+    this->get_parameter("kd_tree_threshold_sq", kd_tree_threshold_sq_);
+    this->get_parameter("process_every_n", process_every_n_);
+    this->get_parameter("accumulate_time", accumulate_time);
     auto temp_cloud = pcl::PointCloud<pcl::PointXYZ>::Ptr(new pcl::PointCloud<pcl::PointXYZ>);
-    if (pcl::io::loadPCDFile<pcl::PointXYZ>("config/RM2024.pcd", *temp_cloud) == -1)
+    if (pcl::io::loadPCDFile<pcl::PointXYZ>(map_file, *temp_cloud) == -1)
     {
-        PCL_ERROR("Couldn't read file map.pcd \n");
+        RCLCPP_ERROR(this->get_logger(), "Couldn't read map file: %s", map_file.c_str());
     }
     //下采样
     pcl::VoxelGrid<pcl::PointXYZ> sor;
     sor.setInputCloud(temp_cloud);
-    sor.setLeafSize(0.1f, 0.1f, 0.1f);
+    float v = static_cast<float>(voxel_leaf);
+    sor.setLeafSize(v, v, v);
     auto result = pcl::PointCloud<pcl::PointXYZ>::Ptr(new pcl::PointCloud<pcl::PointXYZ>);
     sor.filter(*result);
     map_cloud = result;
     kd_Tree.setInputCloud(map_cloud);
 
-    sub_ = this->create_subscription<sensor_msgs::msg::PointCloud2>("/livox/lidar", 10, std::bind(&DynamicCloud::callback, this, std::placeholders::_1));
-    pub_ = this->create_publisher<sensor_msgs::msg::PointCloud2>("/livox/lidar_dynamic", 10);
-    other_pub_ = this->create_publisher<sensor_msgs::msg::PointCloud2>("/livox/lidar_other", 10);
+    sub_ = this->create_subscription<sensor_msgs::msg::PointCloud2>(
+        point_cloud_topic,
+        rclcpp::SensorDataQoS(),
+        std::bind(&DynamicCloud::callback, this, std::placeholders::_1));
+    pub_ = this->create_publisher<sensor_msgs::msg::PointCloud2>("/livox/lidar_dynamic", rclcpp::SensorDataQoS());
+    other_pub_ = this->create_publisher<sensor_msgs::msg::PointCloud2>("/livox/lidar_other", rclcpp::SensorDataQoS());
     detect_pub_ = this->create_publisher<vision_interface::msg::RadarWarn>("/lidar_detect", 10);
+    RCLCPP_INFO(this->get_logger(), "Dynamic cloud input topic: %s", point_cloud_topic.c_str());
     RCLCPP_INFO(rclcpp::get_logger("rclcpp"), "Dynamic Cloud Launch!");
 }
 
-void DynamicCloud::GetDynamicCloud(pcl::PointCloud<pcl::PointXYZ> &input_cloud,pcl::PointCloud<pcl::PointXYZ> &output_cloud,float threshold,int thread_num){
+void DynamicCloud::GetDynamicCloud(pcl::PointCloud<pcl::PointXYZ> &input_cloud,pcl::PointCloud<pcl::PointXYZ> &output_cloud,float threshold_sq,int thread_num){
     int K=1;
     std::vector<std::thread> threads;
     std::vector<pcl::PointCloud<pcl::PointXYZ>> clouds(thread_num);
@@ -38,12 +60,12 @@ void DynamicCloud::GetDynamicCloud(pcl::PointCloud<pcl::PointXYZ> &input_cloud,p
     int cloud_size=input_cloud.points.size();
     int step=cloud_size/thread_num;
     for(int i=0;i<thread_num;i++){
-        threads.push_back(std::thread([i,step,cloud_size,&clouds,&input_cloud,this,threshold,K](){
+        threads.push_back(std::thread([i,step,cloud_size,&clouds,&input_cloud,this,threshold_sq,K](){
             for(int j=i*step;j<(i+1)*step;j++){
                 std::vector<int> pointIdxNKNSearch(K);
                 std::vector<float> pointNKNSquaredDistance(K);
                 if(kd_Tree.nearestKSearch(input_cloud.points[j],K,pointIdxNKNSearch,pointNKNSquaredDistance)>0){
-                    if(pointNKNSquaredDistance[0]>threshold){
+                    if(pointNKNSquaredDistance[0]>threshold_sq){
                         clouds[i].points.push_back(input_cloud.points[j]);
                     }
                 }
@@ -154,14 +176,24 @@ void DynamicCloud::callback(const sensor_msgs::msg::PointCloud2::SharedPtr msg)
     auto receive_cloud = pcl::PointCloud<pcl::PointXYZ>();
     pcl::fromROSMsg(*msg, receive_cloud);
 
+    // 天花板过滤：在输入点云坐标系下，transform 之前丢弃 z > ceiling_z_max 的点
+    pcl::PointCloud<pcl::PointXYZ> ceiling_filtered;
+    for (const auto& pt : receive_cloud.points) {
+        if (pt.z <= ceiling_z_max_) ceiling_filtered.push_back(pt);
+    }
+    receive_cloud = ceiling_filtered;
+
     std::chrono::steady_clock::time_point t1 = std::chrono::steady_clock::now();
     geometry_msgs::msg::TransformStamped transform_stamped;
     // 获取目标坐标系的变换
     auto ta=std::chrono::steady_clock::now();
-    try{
-    transform_stamped = tf_buffer_.lookupTransform("rm_frame", msg->header.frame_id, tf2::TimePointZero);}
-    catch (tf2::TransformException &ex){
-        RCLCPP_ERROR(rclcpp::get_logger("rclcpp"), "Transform error: %s", ex.what());
+    try {
+        transform_stamped = tf_buffer_.lookupTransform(
+            "rm_frame", msg->header.frame_id, rclcpp::Time(0),
+            rclcpp::Duration::from_seconds(1.0));
+    } catch (tf2::TransformException &ex) {
+        RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 2000,
+            "TF lookup failed (rm_frame<-%s): %s", msg->header.frame_id.c_str(), ex.what());
         return;
     }
     pcl::PointCloud<pcl::PointXYZ> transformed_cloud;
@@ -215,7 +247,13 @@ void DynamicCloud::callback(const sensor_msgs::msg::PointCloud2::SharedPtr msg)
     }
     // std::cout << "filter time: " << std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now()-ta).count()/1000.0 << std::endl;
     pcl::PointCloud<pcl::PointXYZ> dynamic_pointcloud;
-    GetDynamicCloud(filtered_cloud,dynamic_pointcloud,0.1,12);
+    frame_counter_++;
+    if (process_every_n_ <= 0 || frame_counter_ % process_every_n_ == 0 || last_dynamic_cloud_.empty()) {
+        GetDynamicCloud(filtered_cloud, dynamic_pointcloud, kd_tree_threshold_sq_, 12);
+        last_dynamic_cloud_ = dynamic_pointcloud;
+    } else {
+        dynamic_pointcloud = last_dynamic_cloud_;
+    }
     ///TODO: 点云积分的代码比较重复，需要重构成一个class，维护那些积分的点云
 
     if(accumulate_count<accumulate_time){
@@ -246,6 +284,8 @@ void DynamicCloud::callback(const sensor_msgs::msg::PointCloud2::SharedPtr msg)
     output.header.frame_id = "rm_frame";
     output.header.stamp = msg->header.stamp;
     pub_->publish(output);
+    RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 2000,
+        "dynamic: filtered=%zu -> dyn=%zu -> accum=%zu", filtered_cloud.size(), dynamic_pointcloud.size(), accumulated_cloud.size());
 
     pcl::toROSMsg(other_accumulated_cloud, output);
     other_pub_->publish(output);
@@ -263,7 +303,7 @@ void DynamicCloud::callback(const sensor_msgs::msg::PointCloud2::SharedPtr msg)
 
     if(dart_cloud.size()>5){
         RCLCPP_WARN(rclcpp::get_logger("rclcpp"), "Find dart cloud!");
-        RCLCPP_WARN(rclcpp::get_logger("rclcpp"), "Dart cloud size: %d", dart_cloud.size());
+        RCLCPP_WARN(rclcpp::get_logger("rclcpp"), "Dart cloud size: %zu", dart_cloud.size());
         lidar_detect.dart_state = 1;
     }
 
@@ -327,7 +367,7 @@ void DynamicCloud::callback(const sensor_msgs::msg::PointCloud2::SharedPtr msg)
     }
     if(engine_cloud.size()>5){
         RCLCPP_WARN(rclcpp::get_logger("rclcpp"), "Find engine cloud!");
-        RCLCPP_WARN(rclcpp::get_logger("rclcpp"), "Engine cloud size: %d", engine_cloud.size());
+        RCLCPP_WARN(rclcpp::get_logger("rclcpp"), "Engine cloud size: %zu", engine_cloud.size());
         lidar_detect.engine_state = 2;
     }
     
@@ -342,7 +382,7 @@ void DynamicCloud::callback(const sensor_msgs::msg::PointCloud2::SharedPtr msg)
     }
     if(little_engine_cloud.size()>5){
         RCLCPP_WARN(rclcpp::get_logger("rclcpp"), "Find little engine cloud!");
-        RCLCPP_WARN(rclcpp::get_logger("rclcpp"), "Little engine cloud size: %d", little_engine_cloud.size());
+        RCLCPP_WARN(rclcpp::get_logger("rclcpp"), "Little engine cloud size: %zu", little_engine_cloud.size());
         lidar_detect.engine_state = 1;
     }
     
@@ -350,7 +390,8 @@ void DynamicCloud::callback(const sensor_msgs::msg::PointCloud2::SharedPtr msg)
     // std::cout << "publish time: " << std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now()-ta).count()/1000.0 << std::endl;
     // RCLCPP_INFO(rclcpp::get_logger("rclcpp"), "cloud size: %d", accumulated_cloud.points.size());
     std::chrono::steady_clock::time_point t2 = std::chrono::steady_clock::now();
-    RCLCPP_INFO(rclcpp::get_logger("rclcpp"), "Dynamic callback time: %f", std::chrono::duration_cast<std::chrono::microseconds>(t2 - t1).count()/1000.0);
+    RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 3000,
+        "Dynamic callback time: %f ms", std::chrono::duration_cast<std::chrono::microseconds>(t2 - t1).count()/1000.0);
 }
 }//namespace tdt_radar
 

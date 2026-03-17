@@ -25,4 +25,7 @@ install(DIRECTORY
   launch
   DESTINATION share/${PROJECT_NAME}/
 )
+install(PROGRAMS scripts/display_aligner_node.py
+  DESTINATION lib/${PROJECT_NAME}
+)
 ament_auto_package ()

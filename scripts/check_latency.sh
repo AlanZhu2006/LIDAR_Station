@@ -24,17 +24,11 @@ print_param() {
   echo "   $label: ${raw#*: }"
 }
 
-echo "1. 话题频率（运行 5 秒后 Ctrl+C 可提前结束）"
-echo "   camera_image:"
-timeout 5 ros2 topic hz /camera_image 2>/dev/null || echo "   无数据"
-echo "   livox/lidar:"
-timeout 5 ros2 topic hz /livox/lidar 2>/dev/null || echo "   无数据"
-echo "   resolve_result:"
-timeout 5 ros2 topic hz /resolve_result 2>/dev/null || echo "   无数据"
-echo "   livox/lidar_cluster:"
-timeout 5 ros2 topic hz /livox/lidar_cluster 2>/dev/null || echo "   无数据"
-echo "   livox/lidar_kalman:"
-timeout 5 ros2 topic hz /livox/lidar_kalman 2>/dev/null || echo "   无数据"
+echo "0. 真实 ROS 图（--no-daemon，避免缓存误判）"
+timeout 3 ros2 node list --no-daemon 2>/dev/null | sed 's/^/   /' || echo "   无节点"
+echo ""
+
+python3 scripts/check_latency.py --duration "${LATENCY_SAMPLE_SEC:-4.0}" || echo "   采样失败"
 
 echo ""
 echo "2. 当前节点参数（若节点在运行）"

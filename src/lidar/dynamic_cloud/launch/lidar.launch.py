@@ -26,12 +26,14 @@ def generate_launch_description():
     cluster_tolerance = LaunchConfiguration('cluster_tolerance', default='0.25')
     min_cluster_size = LaunchConfiguration('min_cluster_size', default='12')
     max_cluster_size = LaunchConfiguration('max_cluster_size', default='1000')
+    cluster_voxel_leaf_size = LaunchConfiguration('cluster_voxel_leaf_size', default='0.0')
     point_cloud_topic = LaunchConfiguration('point_cloud_topic', default='/livox/lidar')
     point_cloud_frame_id = LaunchConfiguration('point_cloud_frame_id', default='livox_frame')
     tf_child_frame = LaunchConfiguration('tf_child_frame', default='livox_frame')
     static_tf_pitch_rad = LaunchConfiguration('static_tf_pitch_rad', default='0')
     auto_align = LaunchConfiguration('auto_align', default='true')
     camera_detect_radius = LaunchConfiguration('camera_detect_radius', default='1.0')
+    track_match_radius = LaunchConfiguration('track_match_radius', default='1.0')
     publish_stationary_targets = LaunchConfiguration('publish_stationary_targets', default='false')
     
     def get_localization_node(package, plugin):
@@ -77,6 +79,7 @@ def generate_launch_description():
                 'cluster_tolerance': cluster_tolerance,
                 'min_cluster_size': min_cluster_size,
                 'max_cluster_size': max_cluster_size,
+                'cluster_voxel_leaf_size': cluster_voxel_leaf_size,
             }],
             extra_arguments=[{'use_intra_process_comms': True}]
         )
@@ -90,6 +93,7 @@ def generate_launch_description():
                 'use_sim_time': use_sim_time,
                 'debug_camera_match': LaunchConfiguration('debug_camera_match', default='false'),
                 'camera_detect_radius': camera_detect_radius,
+                'track_match_radius': track_match_radius,
                 'publish_stationary_targets': publish_stationary_targets,
             }],
             extra_arguments=[{'use_intra_process_comms': True}]
@@ -111,7 +115,7 @@ def generate_launch_description():
             name='lidar_container',
             namespace='',
             package='rclcpp_components',
-            executable='component_container',
+            executable='component_container_mt',
             composable_node_descriptions=list(nodes),
             output='both',
             emulate_tty=True,
@@ -164,6 +168,7 @@ def generate_launch_description():
             DeclareLaunchArgument('cluster_tolerance', default_value='0.25', description='Euclidean cluster tolerance in meters'),
             DeclareLaunchArgument('min_cluster_size', default_value='12', description='Minimum number of points per cluster'),
             DeclareLaunchArgument('max_cluster_size', default_value='1000', description='Maximum number of points per cluster'),
+            DeclareLaunchArgument('cluster_voxel_leaf_size', default_value='0.0', description='Voxel downsample size before clustering; 0 disables'),
             DeclareLaunchArgument('point_cloud_topic', default_value='/livox/lidar', description='Input PointCloud2 topic'),
             DeclareLaunchArgument('point_cloud_frame_id', default_value='livox_frame', description='Input point cloud frame id used by startup TF'),
             DeclareLaunchArgument('tf_child_frame', default_value='livox_frame', description='TF child frame published by localization/startup TF'),
@@ -171,6 +176,7 @@ def generate_launch_description():
             DeclareLaunchArgument('auto_align', default_value='true', description='Auto-level RViz display using rm_frame_display'),
             DeclareLaunchArgument('debug_camera_match', default_value='false', description='Enable camera_match debug logs when red/blue not appearing'),
             DeclareLaunchArgument('camera_detect_radius', default_value='1.0', description='Camera-LiDAR match radius in meters'),
+            DeclareLaunchArgument('track_match_radius', default_value='1.0', description='LiDAR Kalman track association radius in meters'),
             DeclareLaunchArgument('publish_stationary_targets', default_value='false', description='Publish stationary targets in /livox/lidar_kalman for debugging'),
             static_tf,
             display_aligner,

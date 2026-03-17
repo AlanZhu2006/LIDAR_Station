@@ -87,7 +87,7 @@
 - **默认不开倾斜修正**：当前这套实机数据里原始 `/livox/lidar` 已基本水平，只有在原始点云本身 visibly tilted 时才启用 `lidar_tilt.launch.py`
 - **RViz 自动摆正只影响显示**：`auto_align:=true` 会发布 `rm_frame_display`，便于看平地面，但不替代地图/GICP 配准
 - **动态检测默认改为机器人优先**：`start_fusion.sh` 现在默认使用 `kd_tree_threshold_sq=0.15`、`min_cluster_size=8`，比旧版更容易保留低矮移动机器人
-- **视觉侧默认 testmap 尺度**：`field_width_m=6.37`、`field_height_m=11.32`
+- **视觉侧默认 testmap 尺度**：`field_width_m=3.82`、`field_height_m=6.79`
 - **视觉侧颜色方向必须匹配己方**：`SELF_COLOR=R` 或 `SELF_COLOR=B`
 
 推荐直接使用：
@@ -132,7 +132,7 @@ FIELD_WIDTH_M=9.6 FIELD_HEIGHT_M=5.4 SELF_COLOR=R ./scripts/start_fusion.sh
   - 接入 `process_width / process_height`
 - `src/tdt_vision/detect/scripts/nyush_world_node.py`
   - 修复标定分辨率参数类型问题
-  - 默认暴露 `field_width_m=6.37`、`field_height_m=11.32`
+  - 默认暴露 `field_width_m=3.82`、`field_height_m=6.79`
   - 降低车检测阈值、扩大 armor ROI，并在 armor miss 时对增强后的 ROI 自动重试
   - 新增状态日志：`NYUSH status: cars=..., armors=..., tracks_ready=..., resolve_nonzero=...`
   - `detect_image` 现在只处理最新帧，不再让旧帧在回调里排队
@@ -210,7 +210,7 @@ SELF_COLOR=R ./scripts/start_fusion.sh
 - LiDAR：`publish_stationary_targets:=false`
 - Camera：`publish_width:=1280`、`publish_height:=960`
 - NYUSH：`map_mode:=testmap`
-- NYUSH：`field_width_m:=6.37`、`field_height_m:=11.32`
+- NYUSH：`field_width_m:=3.82`、`field_height_m:=6.79`
 - NYUSH：`calibration_width_px:=1280`、`calibration_height_px:=960`
 - NYUSH：`window_size:=2`、`max_inactive_time:=2.0`
 - NYUSH：`car_conf:=0.15`、`armor_conf:=0.45`
@@ -568,8 +568,8 @@ ros2 launch tdt_vision nyush_integration.launch.py \
   nyush_path:=/home/nyu/Desktop/NYUSH_Robotics_RM_RadarStation \
   map_mode:=testmap \
   state:=R \
-  field_width_m:=6.37 \
-  field_height_m:=11.32 \
+  field_width_m:=3.82 \
+  field_height_m:=6.79 \
   calibration_width_px:=1280 \
   calibration_height_px:=960 \
   publish_debug_map:=true
@@ -601,7 +601,7 @@ SELF_COLOR=R ./scripts/start_fusion.sh
 - LiDAR 地图：`mapping_ws/test.pcd`
 - 原始点云按**已水平**处理，默认启动 `lidar.launch.py`
 - 动态检测默认：`kd_tree_threshold_sq=0.15`、`cluster_tolerance=0.25`、`min_cluster_size=8`
-- NYUSH 默认：`map_mode:=testmap`、`field_width_m:=6.37`、`field_height_m:=11.32`
+- NYUSH 默认：`map_mode:=testmap`、`field_width_m:=3.82`、`field_height_m:=6.79`
 - NYUSH 默认：`calibration_width_px:=1280`、`calibration_height_px:=960`
 - NYUSH 默认：`publish_debug_map:=true`
 - RViz 默认载入：`src/livox_ros_driver2/config/pointcloud_lidar.rviz`
@@ -682,8 +682,8 @@ ros2 launch tdt_vision nyush_integration.launch.py \
   nyush_path:=/home/nyu/Desktop/NYUSH_Robotics_RM_RadarStation \
   map_mode:=testmap \
   state:=R \
-  field_width_m:=6.37 \
-  field_height_m:=11.32 \
+  field_width_m:=3.82 \
+  field_height_m:=6.79 \
   calibration_width_px:=1280 \
   calibration_height_px:=960 \
   publish_debug_map:=true
@@ -796,7 +796,7 @@ ros2 run hik_camera hik_camera_node
 # 终端2：nyush_integration（发布 /resolve_result，融合必需）
 ros2 launch tdt_vision nyush_integration.launch.py \
   nyush_path:=/home/nyu/Desktop/NYUSH_Robotics_RM_RadarStation \
-  map_mode:=testmap state:=R field_width_m:=6.37 field_height_m:=11.32 \
+  map_mode:=testmap state:=R field_width_m:=3.82 field_height_m:=6.79 \
   calibration_width_px:=1280 calibration_height_px:=960 \
   publish_debug_map:=true
 
@@ -806,7 +806,7 @@ ros2 launch tdt_vision nyush_integration.launch.py \
 `nyush_integration` 关键参数：
 
 - `state`：己方颜色，必须与实际一致
-- `field_width_m` / `field_height_m`：世界坐标缩放，当前 testmap 默认是 `6.37 x 11.32`
+- `field_width_m` / `field_height_m`：世界坐标缩放，当前 testmap 默认是 `3.82 x 6.79`
 - `map_mode`：当前只建议用 `testmap`
 - `calibration_width_px` / `calibration_height_px`：必须与运行时 `camera_image` 分辨率一致；当前脚本默认 `1280 x 960`
 - `publish_debug_map`：建议保持 `true`，便于看 `/nyush_map_image`
@@ -820,7 +820,7 @@ ros2 run hik_camera hik_camera_node
 # 终端2
 ros2 launch tdt_vision nyush_integration.launch.py \
   nyush_path:=/home/nyu/Desktop/NYUSH_Robotics_RM_RadarStation \
-  map_mode:=testmap state:=R field_width_m:=6.37 field_height_m:=11.32 \
+  map_mode:=testmap state:=R field_width_m:=3.82 field_height_m:=6.79 \
   calibration_width_px:=1280 calibration_height_px:=960 \
   publish_debug_map:=true
 
@@ -996,8 +996,8 @@ ros2 launch tdt_vision nyush_integration.launch.py \
   nyush_path:=/home/nyu/Desktop/NYUSH_Robotics_RM_RadarStation \
   map_mode:=testmap \
   state:=R \
-  field_width_m:=6.37 \
-  field_height_m:=11.32 \
+  field_width_m:=3.82 \
+  field_height_m:=6.79 \
   calibration_width_px:=1280 \
   calibration_height_px:=960 \
   publish_debug_map:=true
@@ -1287,7 +1287,7 @@ detect_callback：对每个红/蓝点 (i=0~5 对应英雄/工程/步兵/哨兵)
 | 条件 | 说明 |
 |------|------|
 | **同一坐标系** | resolve_result 必须是 **rm_frame** 下的 2D 坐标（x,y），与 cluster 一致 |
-| **同一尺度** | `field_width_m` / `field_height_m` 必须与当前 testmap 的真实米制一致；当前脚本默认是 `6.37 x 11.32` |
+| **同一尺度** | `field_width_m` / `field_height_m` 必须与当前 testmap 的真实米制一致；当前脚本默认是 `3.82 x 6.79` |
 | **颜色方向正确** | `nyush_integration` 的 `state` 必须与己方颜色一致，否则红蓝语义会反 |
 | **相机外参标定** | NYUSH 世界坐标节点需正确标定，否则相机解算位置与雷达不对齐 |
 | **时间戳** | camera_match 用时间差 < 1s 找最近雷达点，时间不同步会影响匹配 |
@@ -1633,8 +1633,8 @@ ros2 launch tdt_vision nyush_integration.launch.py \
   nyush_path:=/home/nyu/Desktop/NYUSH_Robotics_RM_RadarStation \
   map_mode:=testmap \
   state:=R \
-  field_width_m:=6.37 \
-  field_height_m:=11.32 \
+  field_width_m:=3.82 \
+  field_height_m:=6.79 \
   calibration_width_px:=1280 \
   calibration_height_px:=960 \
   publish_debug_map:=true

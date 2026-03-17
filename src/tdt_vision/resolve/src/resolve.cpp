@@ -6,6 +6,10 @@ namespace tdt_radar {
 
 Resolve::Resolve(const rclcpp::NodeOptions& node_options)
     : Node("radar_resolve_node", node_options) {
+      this->declare_parameter<double>("field_width_m", field_width_m_);
+      this->declare_parameter<double>("field_height_m", field_height_m_);
+      field_width_m_ = this->get_parameter("field_width_m").as_double();
+      field_height_m_ = this->get_parameter("field_height_m").as_double();
       parser_ = new parser();
       minimap=cv::imread("config/RM2024.png");
   point_sub = this->create_subscription<geometry_msgs::msg::Vector3>(
@@ -22,6 +26,9 @@ Resolve::Resolve(const rclcpp::NodeOptions& node_options)
       "detect_result", rclcpp::SensorDataQoS(),
       std::bind(&Resolve::DetectCallback, this, std::placeholders::_1));
       pub_radar=this->create_publisher<vision_interface::msg::DetectResult>("resolve_result",rclcpp::SensorDataQoS());
+    RCLCPP_INFO(
+        this->get_logger(), "Resolve field size: %.2f x %.2f m",
+        field_width_m_, field_height_m_);
     TDT_INFO("Load radar resolve node success!");
 }
 
@@ -43,7 +50,7 @@ void Resolve::callback(const geometry_msgs::msg::Vector3::SharedPtr msg) {
   pcl::PointCloud<pcl::PointXYZ>::Ptr cloud(new pcl::PointCloud<pcl::PointXYZ>);
   pcl::PointXYZ send_point;
   send_point.x = center_point.x;
-  send_point.y = 15-center_point.y;
+  send_point.y = field_height_m_ - center_point.y;
   std::cout<<center_point<<std::endl;
   send_point.z = 1;
   cloud->points.push_back(send_point);
@@ -67,7 +74,7 @@ void Resolve::DetectCallback(const vision_interface::msg::DetectResult::SharedPt
     blue_point.y = msg->blue_y[i];
     if(blue_point.x*blue_point.y){
       auto center_point=parser_->parse(blue_point);
-      center_point.y=15+center_point.y;
+      center_point.y=field_height_m_ + center_point.y;
       // center_point.x=center_point.x+=6;
       // center_point.y=center_point.y-=4;
       send_data.blue_x[i]=center_point.x;
@@ -81,15 +88,15 @@ void Resolve::DetectCallback(const vision_interface::msg::DetectResult::SharedPt
       send_point.b = 255;
       send_point.a = 255;
       cloud->points.push_back(send_point);
-      cv::circle(Map_clone,cv::Point((Map_clone.cols*center_point.x)/28,Map_clone.rows*(15-center_point.y)/15),20,cv::Scalar(200,0,0),-1);
-      cv::putText(Map_clone,std::to_string(i+1),cv::Point((Map_clone.cols*center_point.x)/28-10,Map_clone.rows*(15-center_point.y)/15+10),cv::FONT_HERSHEY_SIMPLEX,1,cv::Scalar(255,255,255),2);
+      cv::circle(Map_clone,cv::Point((Map_clone.cols*center_point.x)/field_width_m_,Map_clone.rows*(field_height_m_-center_point.y)/field_height_m_),20,cv::Scalar(200,0,0),-1);
+      cv::putText(Map_clone,std::to_string(i+1),cv::Point((Map_clone.cols*center_point.x)/field_width_m_-10,Map_clone.rows*(field_height_m_-center_point.y)/field_height_m_+10),cv::FONT_HERSHEY_SIMPLEX,1,cv::Scalar(255,255,255),2);
     }
     cv::Point2f red_point;
     red_point.x = msg->red_x[i];
     red_point.y = msg->red_y[i];
     if(red_point.x*red_point.y){
       auto center_point=parser_->parse(red_point);
-      center_point.y=15+center_point.y;
+      center_point.y=field_height_m_ + center_point.y;
       // center_point.x=center_point.x+=6;
       // center_point.y=center_point.y-=4;
       send_data.red_x[i]=center_point.x;
@@ -103,8 +110,8 @@ void Resolve::DetectCallback(const vision_interface::msg::DetectResult::SharedPt
       send_point.b = 0;
       send_point.a = 255;
       cloud->points.push_back(send_point);
-      cv::circle(Map_clone,cv::Point((Map_clone.cols*center_point.x)/28,Map_clone.rows*(15-center_point.y)/15),20,cv::Scalar(0,0,200),-1);
-      cv::putText(Map_clone,std::to_string(i+1),cv::Point((Map_clone.cols*center_point.x)/28-10,Map_clone.rows*(15-center_point.y)/15+10),cv::FONT_HERSHEY_SIMPLEX,1,cv::Scalar(255,255,255),2);
+      cv::circle(Map_clone,cv::Point((Map_clone.cols*center_point.x)/field_width_m_,Map_clone.rows*(field_height_m_-center_point.y)/field_height_m_),20,cv::Scalar(0,0,200),-1);
+      cv::putText(Map_clone,std::to_string(i+1),cv::Point((Map_clone.cols*center_point.x)/field_width_m_-10,Map_clone.rows*(field_height_m_-center_point.y)/field_height_m_+10),cv::FONT_HERSHEY_SIMPLEX,1,cv::Scalar(255,255,255),2);
     }
   }
 

@@ -10,6 +10,7 @@ using the TDT DetectResult message contract.
 import os
 import sys
 import time
+import json
 import importlib
 from collections import deque
 from pathlib import Path
@@ -27,6 +28,8 @@ from vision_interface.msg import DetectResult
 
 
 DEFAULT_NYUSH_PATH = "/home/nyu/Desktop/NYUSH_Robotics_RM_RadarStation"
+TESTMAP_FIELD_WIDTH_M = 6.79
+TESTMAP_FIELD_HEIGHT_M = 3.82
 
 
 class SlidingWindowFilter:
@@ -65,8 +68,11 @@ class NYUSHWorldNode(Node):
         self.declare_parameter("nyush_path", os.environ.get("NYUSH_PATH", DEFAULT_NYUSH_PATH))
         self.declare_parameter("map_mode", "testmap")
         self.declare_parameter("state", "B")
-        self.declare_parameter("field_width_m", 6.37)
-        self.declare_parameter("field_height_m", 11.32)
+        # `my_map(m).jpg` is the rotated runtime map for the NYUSH test field.
+        # Its horizontal axis is the 6.79 m field width and its vertical axis
+        # is the 3.82 m field height.
+        self.declare_parameter("field_width_m", TESTMAP_FIELD_WIDTH_M)
+        self.declare_parameter("field_height_m", TESTMAP_FIELD_HEIGHT_M)
         self.declare_parameter("calibration_width_px", 0)
         self.declare_parameter("calibration_height_px", 0)
         self.declare_parameter("window_size", 3)
@@ -160,6 +166,8 @@ class NYUSHWorldNode(Node):
         )
 
         self._load_mapping_assets()
+        self._apply_calibration_metadata()
+        self._validate_mapping_configuration()
 
         self.car_detector = self._create_detector(
             weights_path=self._resolve_asset_path(self.get_parameter("car_engine").value),
@@ -344,6 +352,76 @@ class NYUSHWorldNode(Node):
             return value
         return os.path.join(self.nyush_path, fallback_relative)
 
+    @staticmethod
+    def _metadata_path_for_array(array_path: str) -> str:
+        array_file = Path(array_path)
+        return str(array_file.with_suffix(".meta.json"))
+
+    def _load_calibration_metadata(self, array_path: str):
+        metadata_path = self._metadata_path_for_array(array_path)
+        if not os.path.exists(metadata_path):
+            return None
+        try:
+            with open(metadata_path, "r", encoding="utf-8") as f:
+                metadata = json.load(f)
+            metadata["_metadata_path"] = metadata_path
+            return metadata
+        except Exception as exc:
+            self.get_logger().warning(
+                "Failed to load calibration metadata %s: %s" % (metadata_path, exc)
+            )
+            return None
+
+    def _apply_calibration_metadata(self) -> None:
+        metadata = self.calibration_metadata
+        if metadata is None:
+            return
+
+        metadata_map_mode = str(metadata.get("map_profile", "")).strip().lower()
+        metadata_state = str(metadata.get("state", "")).strip().upper()
+        meta_w = metadata.get("calibration_image_width_px")
+        meta_h = metadata.get("calibration_image_height_px")
+        metadata_path = metadata.get("_metadata_path", "<unknown>")
+
+        self.get_logger().info(
+            "Loaded NYUSH calibration metadata: %s" % metadata_path
+        )
+
+        if metadata_map_mode and metadata_map_mode != self.map_mode:
+            self.get_logger().warning(
+                "Calibration metadata map_profile=%s but runtime map_mode=%s"
+                % (metadata_map_mode, self.map_mode)
+            )
+        if metadata_state and metadata_state != self.state:
+            self.get_logger().warning(
+                "Calibration metadata state=%s but runtime state=%s"
+                % (metadata_state, self.state)
+            )
+
+        if meta_w is None or meta_h is None:
+            self.get_logger().warning(
+                "Calibration metadata is missing calibration_image_width_px/height_px"
+            )
+            return
+
+        meta_w = int(meta_w)
+        meta_h = int(meta_h)
+        if self.calibration_width_px <= 0:
+            self.calibration_width_px = meta_w
+        elif self.calibration_width_px != meta_w:
+            self.get_logger().warning(
+                "Launch calibration_width_px=%d overrides metadata width=%d"
+                % (self.calibration_width_px, meta_w)
+            )
+
+        if self.calibration_height_px <= 0:
+            self.calibration_height_px = meta_h
+        elif self.calibration_height_px != meta_h:
+            self.get_logger().warning(
+                "Launch calibration_height_px=%d overrides metadata height=%d"
+                % (self.calibration_height_px, meta_h)
+            )
+
     def _load_mapping_assets(self) -> None:
         calib_map_path = ""
         if self.map_mode == "battle":
@@ -360,15 +438,31 @@ class NYUSHWorldNode(Node):
             calib_map_path = self._param_path("test_calib_map_path", "images/my_map.jpg")
             mask_path = str(self.get_parameter("test_mask_path").value).strip()
 
+        self.calibration_metadata = self._load_calibration_metadata(array_path)
+        if self.calibration_metadata is not None:
+            metadata_map_path = str(self.calibration_metadata.get("runtime_map_path", "")).strip()
+            metadata_calib_map_path = str(
+                self.calibration_metadata.get("calibration_map_path", "")
+            ).strip()
+            if self.map_mode == "testmap":
+                if not str(self.get_parameter("test_map_path").value).strip() and metadata_map_path:
+                    map_path = metadata_map_path
+                if (
+                    not str(self.get_parameter("test_calib_map_path").value).strip()
+                    and metadata_calib_map_path
+                ):
+                    calib_map_path = metadata_calib_map_path
         self.loaded_arrays = np.load(array_path, allow_pickle=True)
         self.map_image = cv2.imread(map_path)
         if self.map_image is None:
             raise RuntimeError(f"Failed to load map image: {map_path}")
         self.test_calib_width = None
+        self.test_calib_height = None
         if calib_map_path:
             calib_map_image = cv2.imread(calib_map_path)
             if calib_map_image is None:
                 raise RuntimeError(f"Failed to load calibration map image: {calib_map_path}")
+            self.test_calib_height = calib_map_image.shape[0]
             self.test_calib_width = calib_map_image.shape[1]
 
         if mask_path:
@@ -385,6 +479,63 @@ class NYUSHWorldNode(Node):
         self.m_ground = self.loaded_arrays[0]
         self.m_height_r = self.loaded_arrays[1] if len(self.loaded_arrays) > 1 else self.m_ground
         self.m_height_g = self.loaded_arrays[2] if len(self.loaded_arrays) > 2 else self.m_ground
+
+    def _validate_mapping_configuration(self) -> None:
+        map_aspect = float(self.map_width) / float(self.map_height)
+        inverse_map_aspect = float(self.map_height) / float(self.map_width)
+        field_aspect = float(self.field_width_m) / float(self.field_height_m)
+        aspect_error = abs(field_aspect - map_aspect) / map_aspect
+
+        if self.map_mode == "testmap":
+            calib_desc = "unknown"
+            if self.test_calib_width is not None and self.test_calib_height is not None:
+                calib_desc = f"{self.test_calib_width}x{self.test_calib_height}"
+            self.get_logger().info(
+                "NYUSH testmap assets: runtime_map=%dx%d, calibration_map=%s, "
+                "expected_testmap_field=%.2fx%.2fm"
+                % (
+                    self.map_width,
+                    self.map_height,
+                    calib_desc,
+                    TESTMAP_FIELD_WIDTH_M,
+                    TESTMAP_FIELD_HEIGHT_M,
+                )
+            )
+            if self.field_width_m < self.field_height_m:
+                self.get_logger().warning(
+                    "testmap field_width_m=%.2f is smaller than field_height_m=%.2f, "
+                    "but my_map(m).jpg is landscape after rotation. "
+                    "This usually means width/height were swapped."
+                    % (self.field_width_m, self.field_height_m)
+                )
+            inverse_aspect_error = abs(field_aspect - inverse_map_aspect) / inverse_map_aspect
+            if inverse_aspect_error <= 0.10:
+                self.get_logger().warning(
+                    "testmap field aspect %.3f matches the portrait calibration-map aspect %.3f "
+                    "instead of the runtime map aspect %.3f. "
+                    "For my_map(m).jpg you likely want field_width_m=%.2f and field_height_m=%.2f."
+                    % (
+                        field_aspect,
+                        inverse_map_aspect,
+                        map_aspect,
+                        TESTMAP_FIELD_WIDTH_M,
+                        TESTMAP_FIELD_HEIGHT_M,
+                    )
+                )
+
+        if aspect_error > 0.10:
+            self.get_logger().warning(
+                "Map metric aspect ratio mismatch: map=%dx%d (%.3f), field=%.2fx%.2fm (%.3f). "
+                "World coordinates will be skewed; check field_width_m/field_height_m for the active map."
+                % (
+                    self.map_width,
+                    self.map_height,
+                    map_aspect,
+                    self.field_width_m,
+                    self.field_height_m,
+                    field_aspect,
+                )
+            )
 
     def _mapped_point_to_display(self, mapped_point: np.ndarray):
         map_x = float(mapped_point[0][0][0])

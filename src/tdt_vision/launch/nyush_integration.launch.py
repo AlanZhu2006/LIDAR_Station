@@ -24,12 +24,12 @@ def generate_launch_description():
     )
     field_width_arg = DeclareLaunchArgument(
         'field_width_m',
-        default_value='6.37',
+        default_value='6.79',
         description='Physical field width in meters for map scaling',
     )
     field_height_arg = DeclareLaunchArgument(
         'field_height_m',
-        default_value='11.32',
+        default_value='3.82',
         description='Physical field height in meters for map scaling',
     )
     calibration_width_arg = DeclareLaunchArgument(

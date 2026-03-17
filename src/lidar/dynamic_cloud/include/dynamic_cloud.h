@@ -28,6 +28,11 @@ class DynamicCloud : public rclcpp::Node
     private:
     int accumulate_time = 3;
     int accumulate_count = 0;
+    double ceiling_z_max_ = 100.0;
+    float kd_tree_threshold_sq_ = 0.28f;  // ~0.53m^2，>此值判为动态，减少误判
+    int process_every_n_ = 1;              // 每N帧做一次kd-tree；1=每帧，2/3=跳帧省算力
+    int frame_counter_ = 0;
+    pcl::PointCloud<pcl::PointXYZ> last_dynamic_cloud_;
     pcl::PointCloud<pcl::PointXYZ>::Ptr map_cloud;
     std::vector<pcl::PointCloud<pcl::PointXYZ>::Ptr> accumulated_clouds_;
     std::vector<pcl::PointCloud<pcl::PointXYZ>::Ptr> other_accumulated_clouds_;
@@ -36,7 +41,7 @@ class DynamicCloud : public rclcpp::Node
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr other_pub_;
     rclcpp::Publisher<vision_interface::msg::RadarWarn>::SharedPtr detect_pub_;
     void callback(const sensor_msgs::msg::PointCloud2::SharedPtr msg);
-    void GetDynamicCloud(pcl::PointCloud<pcl::PointXYZ> &input_cloud,pcl::PointCloud<pcl::PointXYZ> &output_cloud,float threshold,int thread_num);
+    void GetDynamicCloud(pcl::PointCloud<pcl::PointXYZ> &input_cloud,pcl::PointCloud<pcl::PointXYZ> &output_cloud,float threshold_sq,int thread_num);
     pcl::KdTreeFLANN<pcl::PointXYZ> kd_Tree;
     tf2_ros::Buffer tf_buffer_;
     tf2_ros::TransformListener tf_listener_;

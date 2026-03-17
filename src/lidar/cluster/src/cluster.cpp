@@ -10,8 +10,23 @@ namespace tdt_radar{
     Cluster::Cluster(const rclcpp::NodeOptions& node_options): Node("cluster_node", node_options)
     {
         RCLCPP_INFO(this->get_logger(), "cluster_node start");
-        sub_ = this->create_subscription<sensor_msgs::msg::PointCloud2>("/livox/lidar_dynamic", 10, std::bind(&Cluster::callback, this, std::placeholders::_1));
-        pub_ = this->create_publisher<sensor_msgs::msg::PointCloud2>("/livox/lidar_cluster", 10);
+        this->declare_parameter<double>("cluster_tolerance", 0.25);
+        this->declare_parameter<int>("min_cluster_size", 12);
+        this->declare_parameter<int>("max_cluster_size", 1000);
+        this->declare_parameter<double>("cluster_voxel_leaf_size", 0.0);
+        this->get_parameter("cluster_tolerance", cluster_tolerance_);
+        this->get_parameter("min_cluster_size", min_cluster_size_);
+        this->get_parameter("max_cluster_size", max_cluster_size_);
+        this->get_parameter("cluster_voxel_leaf_size", cluster_voxel_leaf_size_);
+        sub_ = this->create_subscription<sensor_msgs::msg::PointCloud2>(
+            "/livox/lidar_dynamic",
+            rclcpp::SensorDataQoS(),
+            std::bind(&Cluster::callback, this, std::placeholders::_1));
+        pub_ = this->create_publisher<sensor_msgs::msg::PointCloud2>("/livox/lidar_cluster", rclcpp::SensorDataQoS());
+        RCLCPP_INFO(
+            this->get_logger(),
+            "Cluster params: tolerance=%.2f, min=%d, max=%d, voxel=%.2f",
+            cluster_tolerance_, min_cluster_size_, max_cluster_size_, cluster_voxel_leaf_size_);
     }
 
 
@@ -21,15 +36,27 @@ void Cluster::callback(const sensor_msgs::msg::PointCloud2::SharedPtr msg)
     pcl::PointCloud<pcl::PointXYZ>::Ptr cloud(new pcl::PointCloud<pcl::PointXYZ>);
     
     pcl::fromROSMsg(*msg, *cloud);
-    if (cloud->empty()) {return;}
+    if (cloud->empty()) {
+        RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 3000, "Cluster: lidar_dynamic empty, skip");
+        return;
+    }
+    if (cluster_voxel_leaf_size_ > 0.0) {
+        pcl::VoxelGrid<pcl::PointXYZ> sor;
+        sor.setInputCloud(cloud);
+        float leaf = static_cast<float>(cluster_voxel_leaf_size_);
+        sor.setLeafSize(leaf, leaf, leaf);
+        pcl::PointCloud<pcl::PointXYZ>::Ptr downsampled(new pcl::PointCloud<pcl::PointXYZ>);
+        sor.filter(*downsampled);
+        cloud = downsampled;
+    }
     pcl::search::KdTree<pcl::PointXYZ>::Ptr tree(new pcl::search::KdTree<pcl::PointXYZ>);
     tree->setInputCloud(cloud);
     auto time = std::chrono::system_clock::now();
 
     pcl::EuclideanClusterExtraction<pcl::PointXYZ> ec;
-    ec.setClusterTolerance (0.25);
-    ec.setMinClusterSize (5);
-    ec.setMaxClusterSize (1000);
+    ec.setClusterTolerance(cluster_tolerance_);
+    ec.setMinClusterSize(min_cluster_size_);
+    ec.setMaxClusterSize(max_cluster_size_);
     ec.setSearchMethod (tree);
     ec.setInputCloud (cloud);
     std::vector<pcl::PointIndices> cluster_indices;
@@ -49,6 +76,9 @@ void Cluster::callback(const sensor_msgs::msg::PointCloud2::SharedPtr msg)
         cloud_cluster->is_dense = true;
 
         pcl::PointXYZ move_point;
+        move_point.x = 0.0f;
+        move_point.y = 0.0f;
+        move_point.z = 0.0f;
         for(auto point:cloud_cluster->points)
         {
             move_point.x += point.x;
@@ -66,7 +96,9 @@ void Cluster::callback(const sensor_msgs::msg::PointCloud2::SharedPtr msg)
     output.header.stamp = msg->header.stamp;
     pub_->publish(output);
     std::chrono::steady_clock::time_point t2 = std::chrono::steady_clock::now();
-    RCLCPP_INFO(this->get_logger(), "Cluster callback time: %f", std::chrono::duration_cast<std::chrono::microseconds>(t2 - t1).count()/1000.0);
+    RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 2000,
+        "Cluster: in=%zu -> %zu clusters, %f ms", cloud->size(), cluster_indices.size(),
+        std::chrono::duration_cast<std::chrono::microseconds>(t2 - t1).count()/1000.0);
 }
 }//namespace tdt_radar
 

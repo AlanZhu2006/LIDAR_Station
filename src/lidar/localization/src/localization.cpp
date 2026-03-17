@@ -10,8 +10,10 @@
 #include <pcl/registration/gicp.h>
 #include <pcl/filters/voxel_grid.h>
 #include <tf2/LinearMath/Quaternion.h>
+#include <tf2/exceptions.h>
 #include <tf2_ros/transform_broadcaster.h>
-#include <tf2_ros/static_transform_broadcaster.h>
+#include <tf2_ros/buffer.h>
+#include <tf2_ros/transform_listener.h>
 #include <geometry_msgs/msg/transform_stamped.hpp>
 #include <builtin_interfaces/msg/time.hpp>
 #include <rclcpp_components/register_node_macro.hpp>
@@ -23,17 +25,29 @@ namespace tdt_radar {
 };
 class Localization : public rclcpp::Node {
 public:
-    Localization(const rclcpp::NodeOptions& node_options) : Node("localization", node_options) {
-        std::string target_pcd_file = "config/RM2024.pcd";
+    Localization(const rclcpp::NodeOptions& node_options)
+        : Node("localization", node_options),
+          tf_buffer_(this->get_clock()),
+          tf_listener_(tf_buffer_) {
+        this->declare_parameter<std::string>("map_file", "config/RM2024.pcd");
+        this->declare_parameter<std::string>("point_cloud_topic", "/livox/lidar");
+        this->declare_parameter<std::string>("tf_child_frame", "livox_frame");
+        std::string target_pcd_file;
+        std::string point_cloud_topic;
+        this->get_parameter("map_file", target_pcd_file);
+        this->get_parameter("point_cloud_topic", point_cloud_topic);
+        this->get_parameter("tf_child_frame", tf_child_frame_);
         // 从pcd读取场地点云
         target_cloud_.reset(new pcl::PointCloud<pcl::PointXYZ>());
-        if (pcl::io::loadPCDFile(target_pcd_file, *target_cloud_)) {
+        if (pcl::io::loadPCDFile(target_pcd_file, *target_cloud_) != 0) {
             RCLCPP_ERROR(this->get_logger(), "Failed to load %s", target_pcd_file.c_str());
             return;
         }
+        RCLCPP_INFO(this->get_logger(), "Loaded map: %s (%zu points)", target_pcd_file.c_str(), target_cloud_->size());
 
         subscription_ = this->create_subscription<sensor_msgs::msg::PointCloud2>(
-            "/livox/lidar", 10, std::bind(&Localization::callback, this, std::placeholders::_1));
+            point_cloud_topic, 10, std::bind(&Localization::callback, this, std::placeholders::_1));
+        RCLCPP_INFO(this->get_logger(), "Localization input topic: %s", point_cloud_topic.c_str());
 
         // 发布场地点云到 /livox/map 话题
         publisher_ = this->create_publisher<sensor_msgs::msg::PointCloud2>("/livox/map", 10);
@@ -47,33 +61,15 @@ public:
             publisher_->publish(target_msg);
         });
 
-        // 初始化TF广播（普通和静态）
+        // TF 广播：仅用 dynamic，配准后发布；静态 identity 由 lidar.launch 的 static_transform_publisher 提供
         tf_broadcaster_ = std::make_shared<tf2_ros::TransformBroadcaster>(this);
-        static_tf_broadcaster_ = std::make_shared<tf2_ros::StaticTransformBroadcaster>(this);
-        
-        // 高频发布静态TF定时器 (10Hz)
-        tf_timer_ = this->create_wall_timer(std::chrono::milliseconds(100), [this]() {
-            if (has_aligned_ || transform != Eigen::Matrix4f::Identity()) {
-                geometry_msgs::msg::TransformStamped transform_stamped;
-                transform_stamped.header.stamp = rclcpp::Time(0);  // 静态TF使用时间0
-                transform_stamped.header.frame_id = "rm_frame";
-                transform_stamped.child_frame_id = "livox_frame";
-                transform_stamped.transform.translation.x = transform(0, 3);
-                transform_stamped.transform.translation.y = transform(1, 3);
-                transform_stamped.transform.translation.z = transform(2, 3);
-                Eigen::Matrix3f rotation = transform.block<3, 3>(0, 0);
-                Eigen::Quaternionf q(rotation);
-                transform_stamped.transform.rotation.x = q.x();
-                transform_stamped.transform.rotation.y = q.y();
-                transform_stamped.transform.rotation.z = q.z();
-                transform_stamped.transform.rotation.w = q.w();
-                static_tf_broadcaster_->sendTransform(transform_stamped);
-            }
-        });
     }
 
 private:
     void callback(const sensor_msgs::msg::PointCloud2::SharedPtr msg) {
+        if (!msg->header.frame_id.empty()) {
+            input_frame_id_ = msg->header.frame_id;
+        }
         if(!has_aligned_){
 
         // 从消息中转换 source_cloud
@@ -140,7 +136,7 @@ private:
 
         sensor_msgs::msg::PointCloud2 filter_msg;
         pcl::toROSMsg(*source_cloud, filter_msg);
-        filter_msg.header.frame_id = "livox_frame";
+        filter_msg.header.frame_id = input_frame_id_;
         filter_publisher_->publish(filter_msg);
 
         // 进行点云配准
@@ -149,8 +145,9 @@ private:
                         target_cloud_->size(), source_cloud->size());
             return;
         }
-        std::cout << "--- pcl::GICP ---" << std::endl;
         boost::shared_ptr<pcl::GeneralizedIterativeClosestPoint<pcl::PointXYZ, pcl::PointXYZ>> gicp(new pcl::GeneralizedIterativeClosestPoint<pcl::PointXYZ, pcl::PointXYZ>());
+        gicp->setMaximumIterations(35);           // 50->35 性能优化
+        gicp->setTransformationEpsilon(1e-5);     // 1e-6->1e-5 收敛阈值
         transform = align(gicp, target_cloud_, source_cloud);
         }
         publishTF(transform, msg->header.stamp);
@@ -163,8 +160,8 @@ private:
         auto t1 = std::chrono::system_clock::now();
         registration->align(*aligned);
         auto t2 = std::chrono::system_clock::now();
-        // std::cout << "calib time   : " << std::chrono::duration_cast<std::chrono::milliseconds>(t2 - t1).count() << "[msec]" << std::endl;
-        RCLCPP_WARN(this->get_logger(), "calib result : %f", registration->getFitnessScore());
+        RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 2000,
+            "GICP calib result: %f", registration->getFitnessScore());
 
         if(registration->getFitnessScore()<0.1){
         has_aligned_ = true;}
@@ -174,15 +171,39 @@ private:
     }
 
     void publishTF(const Eigen::Matrix4f& transform, const builtin_interfaces::msg::Time& stamp) {
+        Eigen::Matrix4f tf_to_child = transform;
+        if (input_frame_id_ != tf_child_frame_) {
+            try {
+                auto input_to_child = tf_buffer_.lookupTransform(
+                    input_frame_id_, tf_child_frame_, rclcpp::Time(0),
+                    rclcpp::Duration::from_seconds(0.2));
+                Eigen::Affine3f composed = Eigen::Affine3f::Identity();
+                composed.translation() << input_to_child.transform.translation.x,
+                                          input_to_child.transform.translation.y,
+                                          input_to_child.transform.translation.z;
+                Eigen::Quaternionf q_child(
+                    input_to_child.transform.rotation.w,
+                    input_to_child.transform.rotation.x,
+                    input_to_child.transform.rotation.y,
+                    input_to_child.transform.rotation.z);
+                composed.rotate(q_child);
+                tf_to_child = transform * composed.matrix();
+            } catch (tf2::TransformException &ex) {
+                RCLCPP_WARN_THROTTLE(
+                    this->get_logger(), *this->get_clock(), 2000,
+                    "Compose TF failed (%s <- %s): %s",
+                    input_frame_id_.c_str(), tf_child_frame_.c_str(), ex.what());
+            }
+        }
 
         geometry_msgs::msg::TransformStamped transform_stamped;
         transform_stamped.header.stamp = stamp;
         transform_stamped.header.frame_id = "rm_frame";
-        transform_stamped.child_frame_id = "livox_frame";
-        transform_stamped.transform.translation.x = transform(0, 3);
-        transform_stamped.transform.translation.y = transform(1, 3);
-        transform_stamped.transform.translation.z = transform(2, 3);
-        Eigen::Matrix3f rotation = transform.block<3, 3>(0, 0);
+        transform_stamped.child_frame_id = tf_child_frame_;
+        transform_stamped.transform.translation.x = tf_to_child(0, 3);
+        transform_stamped.transform.translation.y = tf_to_child(1, 3);
+        transform_stamped.transform.translation.z = tf_to_child(2, 3);
+        Eigen::Matrix3f rotation = tf_to_child.block<3, 3>(0, 0);
         Eigen::Quaternionf q(rotation);
         transform_stamped.transform.rotation.x = q.x();
         transform_stamped.transform.rotation.y = q.y();
@@ -199,17 +220,19 @@ private:
     //创建一个数组用来积分点云
     pcl::PointCloud<pcl::PointXYZ>::Ptr accumulated_cloud_;
     std::vector<pcl::PointCloud<pcl::PointXYZ>::Ptr> accumulated_clouds_;
-    int accumulate_time = 20;
+    int accumulate_time = 10;  // 10帧后开始GICP，减少可加快初始对齐
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr publisher_;
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr filter_publisher_;
     //为map_pub设置计时器
     rclcpp::TimerBase::SharedPtr timer_;
-    rclcpp::TimerBase::SharedPtr tf_timer_;
     double gridSizeDegrees=0.1;//0.1°*0.1°
     std::map<std::pair<int, int>, Grid> gridMap;
+    std::string input_frame_id_ = "livox_frame";
+    std::string tf_child_frame_ = "livox_frame";
 
     std::shared_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
-    std::shared_ptr<tf2_ros::StaticTransformBroadcaster> static_tf_broadcaster_;
+    tf2_ros::Buffer tf_buffer_;
+    tf2_ros::TransformListener tf_listener_;
 };
 } // namespace tdt_radar
 RCLCPP_COMPONENTS_REGISTER_NODE(tdt_radar::Localization)

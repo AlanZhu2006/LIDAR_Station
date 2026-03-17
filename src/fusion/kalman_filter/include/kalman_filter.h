@@ -15,6 +15,7 @@
 #include <vision_interface/msg/radar_warn.hpp>
 #include <vision_interface/msg/match_info.hpp>
 #include <rclcpp_components/register_node_macro.hpp>
+#include <mutex>
 
 namespace tdt_radar{
 class KalmanFilter :public rclcpp::Node
@@ -35,8 +36,20 @@ class KalmanFilter :public rclcpp::Node
     void detect_callback(const vision_interface::msg::DetectResult::SharedPtr msg);
     void lidar_callback(const vision_interface::msg::RadarWarn::SharedPtr msg);
     void match_callback(const vision_interface::msg::MatchInfo::SharedPtr msg);
+    void apply_detect_result(
+        const vision_interface::msg::DetectResult& msg,
+        bool debug,
+        int* resolve_nonzero_out,
+        int* red_matched_out,
+        int* blue_matched_out,
+        float* min_dist_fail_out,
+        double* max_time_diff_fail_out);
     std::vector<Kalman_filter_plus> KFs;
     vision_interface::msg::RadarWarn lidar_detect;
     vision_interface::msg::MatchInfo match_info;
+    std::mutex latest_detect_mutex_;
+    vision_interface::msg::DetectResult latest_detect_msg_;
+    bool has_latest_detect_ = false;
+    uint64_t detect_callback_count_ = 0;
 };
 }//namespace tdt_radar

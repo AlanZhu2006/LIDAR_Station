@@ -89,8 +89,8 @@ def generate_launch_description():
     )
     window_size_arg = DeclareLaunchArgument(
         'window_size',
-        default_value='3',
-        description='SlidingWindowFilter 窗口大小，2=低延迟，3=更平滑',
+        default_value='1',
+        description='SlidingWindowFilter 窗口大小，1=单帧低延迟，2/3=更平滑但时间更模糊',
     )
     max_inactive_time_arg = DeclareLaunchArgument(
         'max_inactive_time',

@@ -22,10 +22,10 @@ def generate_launch_description():
     voxel_leaf_size = LaunchConfiguration('voxel_leaf_size', default='0.25')
     kd_tree_threshold_sq = LaunchConfiguration('kd_tree_threshold_sq', default='0.15')
     process_every_n = LaunchConfiguration('process_every_n', default='1')  # 1=每帧处理，减少闪烁；2/3=跳帧省算力
-    accumulate_time = LaunchConfiguration('accumulate_time', default='2')
-    publish_accumulated_dynamic_cloud = LaunchConfiguration('publish_accumulated_dynamic_cloud', default='true')
+    accumulate_time = LaunchConfiguration('accumulate_time', default='1')
+    publish_accumulated_dynamic_cloud = LaunchConfiguration('publish_accumulated_dynamic_cloud', default='false')
     cluster_tolerance = LaunchConfiguration('cluster_tolerance', default='0.25')
-    min_cluster_size = LaunchConfiguration('min_cluster_size', default='8')
+    min_cluster_size = LaunchConfiguration('min_cluster_size', default='6')
     max_cluster_size = LaunchConfiguration('max_cluster_size', default='1000')
     cluster_voxel_leaf_size = LaunchConfiguration('cluster_voxel_leaf_size', default='0.0')
     min_cluster_diagonal = LaunchConfiguration('min_cluster_diagonal', default='0.08')
@@ -39,8 +39,13 @@ def generate_launch_description():
     tf_child_frame = LaunchConfiguration('tf_child_frame', default='livox_frame')
     static_tf_pitch_rad = LaunchConfiguration('static_tf_pitch_rad', default='0')
     auto_align = LaunchConfiguration('auto_align', default='true')
+    self_color = LaunchConfiguration('self_color', default='R')
     camera_detect_radius = LaunchConfiguration('camera_detect_radius', default='1.0')
     track_match_radius = LaunchConfiguration('track_match_radius', default='1.0')
+    camera_time_match_threshold = LaunchConfiguration('camera_time_match_threshold', default='0.25')
+    detect_queue_max_age = LaunchConfiguration('detect_queue_max_age', default='1.0')
+    detect_queue_max_size = LaunchConfiguration('detect_queue_max_size', default='20')
+    use_smoothed_camera_match_point = LaunchConfiguration('use_smoothed_camera_match_point', default='false')
     publish_stationary_targets = LaunchConfiguration('publish_stationary_targets', default='false')
     publish_unclassified_targets = LaunchConfiguration('publish_unclassified_targets', default='true')
     min_unclassified_history = LaunchConfiguration('min_unclassified_history', default='2')
@@ -111,9 +116,14 @@ def generate_launch_description():
             name='kalman_filter_node',
             parameters=[{
                 'use_sim_time': use_sim_time,
+                'self_color': self_color,
                 'debug_camera_match': LaunchConfiguration('debug_camera_match', default='false'),
                 'camera_detect_radius': camera_detect_radius,
                 'track_match_radius': track_match_radius,
+                'camera_time_match_threshold': camera_time_match_threshold,
+                'detect_queue_max_age': detect_queue_max_age,
+                'detect_queue_max_size': detect_queue_max_size,
+                'use_smoothed_camera_match_point': use_smoothed_camera_match_point,
                 'publish_stationary_targets': publish_stationary_targets,
                 'publish_unclassified_targets': publish_unclassified_targets,
                 'min_unclassified_history': min_unclassified_history,
@@ -190,10 +200,10 @@ def generate_launch_description():
             DeclareLaunchArgument('voxel_leaf_size', default_value='0.25', description='Voxel grid leaf size'),
             DeclareLaunchArgument('kd_tree_threshold_sq', default_value='0.15', description='KD-tree squared distance threshold (~0.39m), smaller=more sensitive to low robots'),
             DeclareLaunchArgument('process_every_n', default_value='1', description='Process every N frames; 1=no skip, 2/3=skip for perf'),
-            DeclareLaunchArgument('accumulate_time', default_value='2', description='Dynamic cloud accumulation window size'),
-            DeclareLaunchArgument('publish_accumulated_dynamic_cloud', default_value='true', description='Publish accumulated dynamic cloud instead of current-frame dynamic cloud'),
+            DeclareLaunchArgument('accumulate_time', default_value='1', description='Dynamic cloud accumulation window size'),
+            DeclareLaunchArgument('publish_accumulated_dynamic_cloud', default_value='false', description='Publish accumulated dynamic cloud instead of current-frame dynamic cloud'),
             DeclareLaunchArgument('cluster_tolerance', default_value='0.25', description='Euclidean cluster tolerance in meters'),
-            DeclareLaunchArgument('min_cluster_size', default_value='8', description='Minimum number of points per cluster'),
+            DeclareLaunchArgument('min_cluster_size', default_value='6', description='Minimum number of points per cluster'),
             DeclareLaunchArgument('max_cluster_size', default_value='1000', description='Maximum number of points per cluster'),
             DeclareLaunchArgument('cluster_voxel_leaf_size', default_value='0.0', description='Voxel downsample size before clustering; 0 disables'),
             DeclareLaunchArgument('min_cluster_diagonal', default_value='0.08', description='Minimum XY diagonal for a valid cluster'),
@@ -207,9 +217,14 @@ def generate_launch_description():
             DeclareLaunchArgument('tf_child_frame', default_value='livox_frame', description='TF child frame published by localization/startup TF'),
             DeclareLaunchArgument('static_tf_pitch_rad', default_value='0', description='Static TF pitch (rad), -50°=-0.873'),
             DeclareLaunchArgument('auto_align', default_value='true', description='Auto-level RViz display using rm_frame_display'),
+            DeclareLaunchArgument('self_color', default_value='R', description='Fallback self color when /match_info is unavailable (R or B)'),
             DeclareLaunchArgument('debug_camera_match', default_value='false', description='Enable camera_match debug logs when red/blue not appearing'),
             DeclareLaunchArgument('camera_detect_radius', default_value='1.0', description='Camera-LiDAR match radius in meters'),
             DeclareLaunchArgument('track_match_radius', default_value='1.0', description='LiDAR Kalman track association radius in meters'),
+            DeclareLaunchArgument('camera_time_match_threshold', default_value='0.25', description='Maximum camera/LiDAR timestamp difference in seconds for fusion'),
+            DeclareLaunchArgument('detect_queue_max_age', default_value='1.0', description='Maximum age in seconds retained in the camera detect queue'),
+            DeclareLaunchArgument('detect_queue_max_size', default_value='20', description='Maximum number of camera detect messages retained for time pairing'),
+            DeclareLaunchArgument('use_smoothed_camera_match_point', default_value='false', description='Allow camera matching against the smoothed KF output instead of only timestamped LiDAR history'),
             DeclareLaunchArgument('publish_stationary_targets', default_value='false', description='Publish stationary targets in /livox/lidar_kalman for debugging'),
             DeclareLaunchArgument('publish_unclassified_targets', default_value='true', description='Publish unclassified gray Kalman targets for debugging'),
             DeclareLaunchArgument('min_unclassified_history', default_value='2', description='Minimum history length before publishing an unclassified gray Kalman target'),

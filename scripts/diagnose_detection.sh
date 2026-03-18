@@ -37,5 +37,5 @@ MSG=$(timeout 1 ros2 topic echo /livox/lidar_cluster --once 2>/dev/null | grep -
 echo "   约 $MSG 个 cluster 中心"
 
 echo ""
-echo "=== 若 lidar_dynamic 为空：检查 kd_tree_threshold_sq（可试 kd_tree_threshold_sq:=0.35）==="
-echo "=== 若 lidar_cluster 为空但 lidar_dynamic 有数据：检查 cluster MinClusterSize（当前 12）==="
+echo "=== 若 lidar_dynamic 为空：检查 kd_tree_threshold_sq（先试更小，如 0.12 或 0.10）==="
+echo "=== 若 lidar_cluster 为空但 lidar_dynamic 有数据：检查 cluster MinClusterSize（当前默认 6）==="

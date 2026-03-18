@@ -8,6 +8,8 @@
 #include <vector>
 #include <cmath>
 #include <algorithm>
+#include <limits>
+#include <map>
 #include <rclcpp/rclcpp.hpp>
 #pragma once
 
@@ -16,7 +18,7 @@ class Kalman_filter_plus {
 private:
     cv::KalmanFilter KF;
 public:
-    float Distance(pcl::PointXY &a, pcl::PointXY &b) {
+    float Distance(const pcl::PointXY &a, const pcl::PointXY &b) const {
         return sqrt(pow(a.x - b.x, 2) + pow(a.y - b.y, 2));
     }
     float get_time() {
@@ -37,6 +39,8 @@ public:
     pcl::PointXY predict_point;
     float detect_r = 1;
     float track_r = 1;
+    double camera_time_threshold = 0.25;
+    bool use_smoothed_camera_match_point = false;
     float car_speed = 2;
     float car_max_speed = 3.0;
     cv::Scalar color;
@@ -253,9 +257,9 @@ public:
     }
 
     // 返回是否匹配成功；out_min_dist 和 out_min_time 用于调试（可选）
-    bool camera_match(rclcpp::Time &time, pcl::PointXY &input, int color, int number,
+    bool camera_match(const rclcpp::Time &time, const pcl::PointXY &input, int color, int number,
                      float* out_min_dist = nullptr, double* out_min_time = nullptr) {
-        const double TIME_THRESHOLD = 1.0f;
+        const double time_threshold = std::max(camera_time_threshold, 0.0);
         if (history.empty()) {
             if (out_min_time) *out_min_time = -1.0;
             if (out_min_dist) *out_min_dist = -1.0f;
@@ -263,8 +267,8 @@ public:
         }
 
         double input_time = GetTimeByRosTime(time);
-        double differ_time = 1000;
-        pcl::PointXY match_point;
+        double differ_time = std::numeric_limits<double>::max();
+        pcl::PointXY match_point = history.back().second;
         for(auto &point : history) {
             double differ = std::abs(point.first - input_time);
             if(differ < differ_time) {
@@ -273,14 +277,13 @@ public:
             }
         }
 
-        // 实机联调中，KF 当前输出点通常比历史原始质心更接近视觉世界坐标；
-        // 因此在时间允许时，优先采用“历史最近点”和“当前滤波输出点”两者中更近的一个。
-        double latest_time_gap = std::abs(history.back().first - input_time);
-        pcl::PointXY current_point = get_output_point();
         float dist = Distance(match_point, input);
-        if (latest_time_gap <= TIME_THRESHOLD) {
+        if (use_smoothed_camera_match_point) {
+            double latest_time_gap = std::abs(history.back().first - input_time);
+            pcl::PointXY current_point = get_output_point();
             float current_dist = Distance(current_point, input);
-            if (differ_time > TIME_THRESHOLD || current_dist < dist) {
+            if (latest_time_gap <= time_threshold &&
+                (differ_time > time_threshold || current_dist < dist)) {
                 differ_time = latest_time_gap;
                 dist = current_dist;
                 match_point = current_point;
@@ -288,9 +291,9 @@ public:
         }
 
         if (out_min_time) *out_min_time = differ_time;
-        if(differ_time > TIME_THRESHOLD) {
+        if(differ_time > time_threshold) {
             if (out_min_dist) *out_min_dist = dist;
-            return false;  // 时间差 > 1s，找不到近时刻的雷达点
+            return false;  // 时间差过大，找不到近时刻的雷达点
         }
         if (out_min_dist) *out_min_dist = dist;
         if(dist < detect_r){
@@ -312,7 +315,7 @@ public:
         return false;  // 距离 > detect_r，标定/坐标系可能不对齐
     }
     static double GetTimeByRosTime(
-        rclcpp::Time& ros_time) {
+        const rclcpp::Time& ros_time) {
         double ros_time_value =ros_time.nanoseconds()/1e9;
         // std::cout<<"ros_time_value"<<ros_time_value<<std::endl;
         return ros_time_value;

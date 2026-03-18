@@ -26,10 +26,10 @@ class DynamicCloud : public rclcpp::Node
     ~DynamicCloud(){}
     
     private:
-    int accumulate_time = 3;
+    int accumulate_time = 1;
     int accumulate_count = 0;
     double ceiling_z_max_ = 100.0;
-    float kd_tree_threshold_sq_ = 0.28f;  // ~0.53m^2，>此值判为动态，减少误判
+    float kd_tree_threshold_sq_ = 0.15f;  // ~0.39m^2，默认更偏向保留低矮小目标
     int process_every_n_ = 1;              // 每N帧做一次kd-tree；1=每帧，2/3=跳帧省算力
     bool publish_accumulated_dynamic_cloud_ = false;
     int frame_counter_ = 0;

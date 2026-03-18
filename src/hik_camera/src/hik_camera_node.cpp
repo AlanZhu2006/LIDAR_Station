@@ -156,6 +156,7 @@ private:
         if (ret != MV_OK) {
             return;
         }
+        const rclcpp::Time capture_stamp = this->now();
         
         // 转换为 BGR
         MV_CC_PIXEL_CONVERT_PARAM convert_param;
@@ -209,7 +210,7 @@ private:
         
         // 发布图像
         auto msg = cv_bridge::CvImage(std_msgs::msg::Header(), "bgr8", publish_img).toImageMsg();
-        msg->header.stamp = this->now();
+        msg->header.stamp = capture_stamp;
         msg->header.frame_id = "camera_frame";
         image_pub_->publish(*msg);
         

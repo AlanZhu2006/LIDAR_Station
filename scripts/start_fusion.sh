@@ -23,6 +23,7 @@ CONFLICT_PATTERNS=(
   "nyush_world_node"
   "hik_camera_node"
   "livox_ros_driver2_node"
+  "debug_map"
   "rviz2"
   "rqt_image_view"
   "pointcloud_transform_node"
@@ -131,10 +132,11 @@ if $LOW_LATENCY; then
   DEFAULT_PROCESS_H=720
   DEFAULT_PROCESS_EVERY_N=2
   DEFAULT_CLUSTER_VOXEL_LEAF_SIZE=0.12
+  DEFAULT_PUBLISH_ACCUMULATED_DYNAMIC_CLOUD=false
   DEFAULT_AUTO_ALIGN=false
   echo ">>> 低延迟模式: publish_freq=$PUB_FREQ, voxel=$VOXEL, accumulate=$ACCUM, camera=${CAM_W}x${CAM_H}, debug_image_every_n=$DEBUG_EVERY_N"
 else
-  PUB_FREQ=10.0
+  PUB_FREQ=5.0
   VOXEL=0.35
   ACCUM=3
   CAM_W=1280
@@ -144,8 +146,9 @@ else
   DEFAULT_PROCESS_H=720
   DEFAULT_PROCESS_EVERY_N=1
   DEFAULT_CLUSTER_VOXEL_LEAF_SIZE=0.0
+  DEFAULT_PUBLISH_ACCUMULATED_DYNAMIC_CLOUD=true
   DEFAULT_AUTO_ALIGN=true
-  echo ">>> 默认模式: publish_freq=$PUB_FREQ, voxel=$VOXEL, accumulate=$ACCUM, camera=${CAM_W}x${CAM_H}, debug_image_every_n=$DEBUG_EVERY_N"
+  echo ">>> 默认模式(激进检出): publish_freq=$PUB_FREQ, voxel=$VOXEL, accumulate=$ACCUM, camera=${CAM_W}x${CAM_H}, debug_image_every_n=$DEBUG_EVERY_N"
 fi
 
 MAP_PATH="$WS_ROOT/mapping_ws/test.pcd"
@@ -153,17 +156,22 @@ DEFAULT_MAP="$WS_ROOT/config/RM2024.pcd"
 NYUSH_PATH="${NYUSH_PATH:-$HOME/Desktop/NYUSH_Robotics_RM_RadarStation}"
 LIDAR_PITCH_DEG="50.0"
 USE_TILT_CORRECTION="${USE_TILT_CORRECTION:-false}"
-KD_TREE_THRESHOLD_SQ="${KD_TREE_THRESHOLD_SQ:-0.15}"
-CLUSTER_TOLERANCE="${CLUSTER_TOLERANCE:-0.25}"
-MIN_CLUSTER_SIZE="${MIN_CLUSTER_SIZE:-8}"
+KD_TREE_THRESHOLD_SQ="${KD_TREE_THRESHOLD_SQ:-0.12}"
+CLUSTER_TOLERANCE="${CLUSTER_TOLERANCE:-0.30}"
+MIN_CLUSTER_SIZE="${MIN_CLUSTER_SIZE:-4}"
 DEBUG_CAMERA_MATCH="${DEBUG_CAMERA_MATCH:-false}"
 CAMERA_DETECT_RADIUS="${CAMERA_DETECT_RADIUS:-1.0}"
 TRACK_MATCH_RADIUS="${TRACK_MATCH_RADIUS:-1.0}"
 PUBLISH_STATIONARY_TARGETS="${PUBLISH_STATIONARY_TARGETS:-false}"
+PUBLISH_ACCUMULATED_DYNAMIC_CLOUD="${PUBLISH_ACCUMULATED_DYNAMIC_CLOUD:-$DEFAULT_PUBLISH_ACCUMULATED_DYNAMIC_CLOUD}"
+CAMERA_TIME_MATCH_THRESHOLD="${CAMERA_TIME_MATCH_THRESHOLD:-0.25}"
+DETECT_QUEUE_MAX_AGE="${DETECT_QUEUE_MAX_AGE:-1.0}"
+DETECT_QUEUE_MAX_SIZE="${DETECT_QUEUE_MAX_SIZE:-20}"
+USE_SMOOTHED_CAMERA_MATCH_POINT="${USE_SMOOTHED_CAMERA_MATCH_POINT:-false}"
 SELF_COLOR="${SELF_COLOR:-R}"
 FIELD_WIDTH_M="${FIELD_WIDTH_M:-6.79}"
 FIELD_HEIGHT_M="${FIELD_HEIGHT_M:-3.82}"
-WINDOW_SIZE="${WINDOW_SIZE:-2}"
+WINDOW_SIZE="${WINDOW_SIZE:-1}"
 MAX_INACTIVE_TIME="${MAX_INACTIVE_TIME:-2.0}"
 CAR_CONF="${CAR_CONF:-0.15}"
 CAR_IOU="${CAR_IOU:-0.50}"
@@ -175,6 +183,7 @@ ENHANCE_ARMOR_ROI_ON_MISS="${ENHANCE_ARMOR_ROI_ON_MISS:-true}"
 DIAGNOSTIC_LOG_EVERY_SEC="${DIAGNOSTIC_LOG_EVERY_SEC:-2.0}"
 PUBLISH_DEBUG_IMAGE="${PUBLISH_DEBUG_IMAGE:-true}"
 PUBLISH_DEBUG_MAP="${PUBLISH_DEBUG_MAP:-true}"
+LAUNCH_DEBUG_MAP="${LAUNCH_DEBUG_MAP:-true}"
 IMAGE_VIEW_WAIT_TIMEOUT_SEC="${IMAGE_VIEW_WAIT_TIMEOUT_SEC:-30}"
 TESTMAP_ALIGNMENT_CONFIG="${TESTMAP_ALIGNMENT_CONFIG:-$WS_ROOT/config/local/testmap_to_rm_frame.yaml}"
 APPLY_TESTMAP_RM_ALIGNMENT="${APPLY_TESTMAP_RM_ALIGNMENT:-true}"
@@ -197,7 +206,7 @@ fi
 echo ">>> LiDAR map: $MAP_PATH"
 echo ">>> Livox network: if=$LIVOX_IF, host_ip=$LIVOX_HOST_IP, lidar_ip=$LIVOX_LIDAR_IP"
 echo ">>> Detection tuning: kd_tree_threshold_sq=$KD_TREE_THRESHOLD_SQ, cluster_tolerance=$CLUSTER_TOLERANCE, min_cluster_size=$MIN_CLUSTER_SIZE"
-echo ">>> Fusion debug: debug_camera_match=$DEBUG_CAMERA_MATCH, camera_detect_radius=$CAMERA_DETECT_RADIUS, track_match_radius=$TRACK_MATCH_RADIUS, publish_stationary_targets=$PUBLISH_STATIONARY_TARGETS"
+echo ">>> Fusion debug: debug_camera_match=$DEBUG_CAMERA_MATCH, camera_detect_radius=$CAMERA_DETECT_RADIUS, track_match_radius=$TRACK_MATCH_RADIUS, publish_stationary_targets=$PUBLISH_STATIONARY_TARGETS, camera_time_match_threshold=$CAMERA_TIME_MATCH_THRESHOLD, use_smoothed_camera_match_point=$USE_SMOOTHED_CAMERA_MATCH_POINT"
 if [[ "$CALIBRATION_WIDTH_PX" == "0" || "$CALIBRATION_HEIGHT_PX" == "0" ]]; then
   CALIBRATION_DESC="auto(metadata/raw)"
 else
@@ -207,23 +216,27 @@ echo ">>> Vision tuning: self_color=$SELF_COLOR, field=${FIELD_WIDTH_M}x${FIELD_
 echo ">>> NYUSH tuning: path=$NYUSH_PATH, window_size=$WINDOW_SIZE, max_inactive_time=$MAX_INACTIVE_TIME, car_conf=$CAR_CONF, armor_conf=$ARMOR_CONF"
 echo ">>> NYUSH armor ROI: expand=$ARMOR_ROI_EXPAND_RATIO, bottom_expand=$ARMOR_ROI_BOTTOM_EXPAND_RATIO, retry_enhance=$ENHANCE_ARMOR_ROI_ON_MISS"
 echo ">>> NYUSH debug: publish_debug_image=$PUBLISH_DEBUG_IMAGE, publish_debug_map=$PUBLISH_DEBUG_MAP, debug_image_every_n=$DEBUG_EVERY_N, process=${PROCESS_WIDTH}x${PROCESS_HEIGHT}, max_processing_fps=$MAX_PROCESSING_FPS, diagnostic_log_every_sec=$DIAGNOSTIC_LOG_EVERY_SEC"
+echo ">>> 2D fused map: launch_debug_map=$LAUNCH_DEBUG_MAP"
 if [[ -f "$TESTMAP_ALIGNMENT_CONFIG" ]]; then
   echo ">>> Testmap->rm_frame alignment: enabled=$APPLY_TESTMAP_RM_ALIGNMENT, config=$TESTMAP_ALIGNMENT_CONFIG"
 else
   echo ">>> Testmap->rm_frame alignment: enabled=$APPLY_TESTMAP_RM_ALIGNMENT, config missing at $TESTMAP_ALIGNMENT_CONFIG"
 fi
-echo ">>> LiDAR runtime: process_every_n=$PROCESS_EVERY_N, accumulate_time=$ACCUM, cluster_voxel_leaf_size=$CLUSTER_VOXEL_LEAF_SIZE, auto_align=$AUTO_ALIGN"
+echo ">>> LiDAR runtime: process_every_n=$PROCESS_EVERY_N, accumulate_time=$ACCUM, publish_accumulated_dynamic_cloud=$PUBLISH_ACCUMULATED_DYNAMIC_CLOUD, cluster_voxel_leaf_size=$CLUSTER_VOXEL_LEAF_SIZE, auto_align=$AUTO_ALIGN"
 echo ">>> rqt_image_view wait timeout: ${IMAGE_VIEW_WAIT_TIMEOUT_SEC}s"
 if [[ "$USE_TILT_CORRECTION" == "true" ]]; then
   echo ">>> LiDAR launch: lidar_tilt.launch.py (pitch=$LIDAR_PITCH_DEG deg)"
-  LIDAR_CMD="LD_PRELOAD=/lib/x86_64-linux-gnu/libusb-1.0.so.0 ros2 launch dynamic_cloud lidar_tilt.launch.py map_file:=$MAP_PATH ceiling_z_max:=100.0 voxel_leaf_size:=$VOXEL process_every_n:=$PROCESS_EVERY_N accumulate_time:=$ACCUM auto_align:=$AUTO_ALIGN lidar_pitch_deg:=$LIDAR_PITCH_DEG kd_tree_threshold_sq:=$KD_TREE_THRESHOLD_SQ cluster_tolerance:=$CLUSTER_TOLERANCE min_cluster_size:=$MIN_CLUSTER_SIZE cluster_voxel_leaf_size:=$CLUSTER_VOXEL_LEAF_SIZE debug_camera_match:=$DEBUG_CAMERA_MATCH camera_detect_radius:=$CAMERA_DETECT_RADIUS track_match_radius:=$TRACK_MATCH_RADIUS publish_stationary_targets:=$PUBLISH_STATIONARY_TARGETS"
+  LIDAR_CMD="LD_PRELOAD=/lib/x86_64-linux-gnu/libusb-1.0.so.0 ros2 launch dynamic_cloud lidar_tilt.launch.py map_file:=$MAP_PATH ceiling_z_max:=100.0 voxel_leaf_size:=$VOXEL process_every_n:=$PROCESS_EVERY_N accumulate_time:=$ACCUM publish_accumulated_dynamic_cloud:=$PUBLISH_ACCUMULATED_DYNAMIC_CLOUD auto_align:=$AUTO_ALIGN self_color:=$SELF_COLOR lidar_pitch_deg:=$LIDAR_PITCH_DEG kd_tree_threshold_sq:=$KD_TREE_THRESHOLD_SQ cluster_tolerance:=$CLUSTER_TOLERANCE min_cluster_size:=$MIN_CLUSTER_SIZE cluster_voxel_leaf_size:=$CLUSTER_VOXEL_LEAF_SIZE debug_camera_match:=$DEBUG_CAMERA_MATCH camera_detect_radius:=$CAMERA_DETECT_RADIUS track_match_radius:=$TRACK_MATCH_RADIUS publish_stationary_targets:=$PUBLISH_STATIONARY_TARGETS camera_time_match_threshold:=$CAMERA_TIME_MATCH_THRESHOLD detect_queue_max_age:=$DETECT_QUEUE_MAX_AGE detect_queue_max_size:=$DETECT_QUEUE_MAX_SIZE use_smoothed_camera_match_point:=$USE_SMOOTHED_CAMERA_MATCH_POINT"
 else
   echo ">>> LiDAR launch: lidar.launch.py (raw cloud already level)"
-  LIDAR_CMD="LD_PRELOAD=/lib/x86_64-linux-gnu/libusb-1.0.so.0 ros2 launch dynamic_cloud lidar.launch.py map_file:=$MAP_PATH ceiling_z_max:=100.0 voxel_leaf_size:=$VOXEL process_every_n:=$PROCESS_EVERY_N accumulate_time:=$ACCUM auto_align:=$AUTO_ALIGN kd_tree_threshold_sq:=$KD_TREE_THRESHOLD_SQ cluster_tolerance:=$CLUSTER_TOLERANCE min_cluster_size:=$MIN_CLUSTER_SIZE cluster_voxel_leaf_size:=$CLUSTER_VOXEL_LEAF_SIZE debug_camera_match:=$DEBUG_CAMERA_MATCH camera_detect_radius:=$CAMERA_DETECT_RADIUS track_match_radius:=$TRACK_MATCH_RADIUS publish_stationary_targets:=$PUBLISH_STATIONARY_TARGETS"
+  LIDAR_CMD="LD_PRELOAD=/lib/x86_64-linux-gnu/libusb-1.0.so.0 ros2 launch dynamic_cloud lidar.launch.py map_file:=$MAP_PATH ceiling_z_max:=100.0 voxel_leaf_size:=$VOXEL process_every_n:=$PROCESS_EVERY_N accumulate_time:=$ACCUM publish_accumulated_dynamic_cloud:=$PUBLISH_ACCUMULATED_DYNAMIC_CLOUD auto_align:=$AUTO_ALIGN self_color:=$SELF_COLOR kd_tree_threshold_sq:=$KD_TREE_THRESHOLD_SQ cluster_tolerance:=$CLUSTER_TOLERANCE min_cluster_size:=$MIN_CLUSTER_SIZE cluster_voxel_leaf_size:=$CLUSTER_VOXEL_LEAF_SIZE debug_camera_match:=$DEBUG_CAMERA_MATCH camera_detect_radius:=$CAMERA_DETECT_RADIUS track_match_radius:=$TRACK_MATCH_RADIUS publish_stationary_targets:=$PUBLISH_STATIONARY_TARGETS camera_time_match_threshold:=$CAMERA_TIME_MATCH_THRESHOLD detect_queue_max_age:=$DETECT_QUEUE_MAX_AGE detect_queue_max_size:=$DETECT_QUEUE_MAX_SIZE use_smoothed_camera_match_point:=$USE_SMOOTHED_CAMERA_MATCH_POINT"
 fi
 launch_command "Livox" "$SETUP && ros2 launch livox_ros_driver2 msg_MID360_launch.py xfer_format:=0 publish_freq:=$PUB_FREQ user_config_path:=$RUNTIME_LIVOX_CONFIG"
 launch_command "Lidar" "$SETUP && $LIDAR_CMD"
 launch_command "Camera" "$SETUP && ros2 run hik_camera hik_camera_node --ros-args -p publish_width:=$CAM_W -p publish_height:=$CAM_H -p poll_period_ms:=20 -p grab_timeout_ms:=5 -p target_fps:=30.0 -p brightness_gamma:=$BRIGHTNESS_GAMMA -p brightness_bias:=$BRIGHTNESS_BIAS"
 launch_command "NYUSH" "$SETUP && ros2 launch tdt_vision nyush_integration.launch.py nyush_path:=$NYUSH_PATH map_mode:=testmap state:=$SELF_COLOR field_width_m:=$FIELD_WIDTH_M field_height_m:=$FIELD_HEIGHT_M calibration_width_px:=$CALIBRATION_WIDTH_PX calibration_height_px:=$CALIBRATION_HEIGHT_PX apply_testmap_rm_alignment:=$APPLY_TESTMAP_RM_ALIGNMENT alignment_config_path:=$TESTMAP_ALIGNMENT_CONFIG brightness_gamma:=$BRIGHTNESS_GAMMA brightness_bias:=$BRIGHTNESS_BIAS brightness_clahe:=$BRIGHTNESS_CLAHE window_size:=$WINDOW_SIZE max_inactive_time:=$MAX_INACTIVE_TIME car_conf:=$CAR_CONF car_iou:=$CAR_IOU armor_conf:=$ARMOR_CONF armor_iou:=$ARMOR_IOU armor_roi_expand_ratio:=$ARMOR_ROI_EXPAND_RATIO armor_roi_bottom_expand_ratio:=$ARMOR_ROI_BOTTOM_EXPAND_RATIO enhance_armor_roi_on_miss:=$ENHANCE_ARMOR_ROI_ON_MISS diagnostic_log_every_sec:=$DIAGNOSTIC_LOG_EVERY_SEC publish_debug_image:=$PUBLISH_DEBUG_IMAGE publish_debug_map:=$PUBLISH_DEBUG_MAP debug_image_every_n:=$DEBUG_EVERY_N process_width:=$PROCESS_WIDTH process_height:=$PROCESS_HEIGHT max_processing_fps:=$MAX_PROCESSING_FPS"
+if [[ "$LAUNCH_DEBUG_MAP" == "true" ]]; then
+  launch_command "DebugMap" "$SETUP && ros2 run debug_map debug_map --ros-args -p alignment_config_path:=$TESTMAP_ALIGNMENT_CONFIG -p self_color:=$SELF_COLOR"
+fi
 launch_command "RViz" "$SETUP && rviz2 -d $WS_ROOT/src/livox_ros_driver2/config/pointcloud_lidar.rviz"
-launch_command "rqt_image_view" "$SETUP && PUBLISH_DEBUG_IMAGE=$PUBLISH_DEBUG_IMAGE PUBLISH_DEBUG_MAP=$PUBLISH_DEBUG_MAP IMAGE_VIEW_WAIT_TIMEOUT_SEC=$IMAGE_VIEW_WAIT_TIMEOUT_SEC bash ./scripts/wait_for_image_topics.sh"
+launch_command "rqt_image_view" "$SETUP && PUBLISH_DEBUG_IMAGE=$PUBLISH_DEBUG_IMAGE PUBLISH_DEBUG_MAP=$PUBLISH_DEBUG_MAP LAUNCH_DEBUG_MAP=$LAUNCH_DEBUG_MAP IMAGE_VIEW_WAIT_TIMEOUT_SEC=$IMAGE_VIEW_WAIT_TIMEOUT_SEC bash ./scripts/wait_for_image_topics.sh"

@@ -61,8 +61,120 @@ class TopDownMeta:
     point_count: int
 
 
+@dataclass
+class AlignmentCandidate:
+    name: str
+    pre_transform: np.ndarray
+    similarity_matrix_3x3: np.ndarray
+    runtime_matrix_3x3: np.ndarray
+    inlier_mask: np.ndarray | None
+    num_inliers: int
+    scale: float
+    rotation_rad: float
+    translation_x_m: float
+    translation_y_m: float
+    errors_m: np.ndarray
+    rmse_m: float
+    max_m: float
+    mean_m: float
+
+
 def ensure_parent(path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
+
+
+def apply_homogeneous_transform(points_xy: np.ndarray, matrix_3x3: np.ndarray) -> np.ndarray:
+    points_h = np.concatenate(
+        [points_xy.astype(np.float64), np.ones((points_xy.shape[0], 1), dtype=np.float64)],
+        axis=1,
+    )
+    transformed_h = (matrix_3x3 @ points_h.T).T
+    transformed_w = transformed_h[:, 2:3]
+    if np.any(np.abs(transformed_w) < 1e-12):
+        raise RuntimeError("homogeneous transform produced points at infinity")
+    return transformed_h[:, :2] / transformed_w
+
+
+def build_flip_x_pre_transform(field_width_m: float) -> np.ndarray:
+    return np.array(
+        [
+            [-1.0, 0.0, float(field_width_m)],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+        ],
+        dtype=np.float64,
+    )
+
+
+def solve_similarity_candidate(
+    src_world_m: np.ndarray,
+    dst_world_m: np.ndarray,
+    *,
+    pre_transform: np.ndarray,
+    name: str,
+) -> AlignmentCandidate:
+    transformed_src = apply_homogeneous_transform(src_world_m, pre_transform)
+    matrix_2x3, inlier_mask = cv2.estimateAffinePartial2D(
+        transformed_src.reshape(-1, 1, 2),
+        dst_world_m.reshape(-1, 1, 2),
+        method=cv2.RANSAC,
+        ransacReprojThreshold=0.25,
+        maxIters=5000,
+        confidence=0.999,
+        refineIters=100,
+    )
+    if matrix_2x3 is None:
+        raise RuntimeError(f"Failed to solve {name} hypothesis")
+
+    similarity_matrix_3x3 = np.eye(3, dtype=np.float64)
+    similarity_matrix_3x3[:2, :] = matrix_2x3
+    runtime_matrix_3x3 = similarity_matrix_3x3 @ pre_transform
+
+    aligned = apply_homogeneous_transform(src_world_m, runtime_matrix_3x3)
+    errors = np.linalg.norm(aligned - dst_world_m, axis=1)
+    scale, rotation_rad, tx, ty = similarity_matrix_to_components(matrix_2x3)
+
+    if inlier_mask is not None:
+        inlier_mask = inlier_mask.reshape(-1).astype(bool)
+        num_inliers = int(np.count_nonzero(inlier_mask))
+    else:
+        num_inliers = int(src_world_m.shape[0])
+
+    return AlignmentCandidate(
+        name=name,
+        pre_transform=pre_transform,
+        similarity_matrix_3x3=similarity_matrix_3x3,
+        runtime_matrix_3x3=runtime_matrix_3x3,
+        inlier_mask=inlier_mask,
+        num_inliers=num_inliers,
+        scale=float(scale),
+        rotation_rad=float(rotation_rad),
+        translation_x_m=float(tx),
+        translation_y_m=float(ty),
+        errors_m=errors,
+        rmse_m=float(np.sqrt(np.mean(np.square(errors)))),
+        max_m=float(np.max(errors)),
+        mean_m=float(np.mean(errors)),
+    )
+
+
+def choose_best_candidate(candidates: list[AlignmentCandidate]) -> AlignmentCandidate:
+    if not candidates:
+        raise RuntimeError("No valid alignment candidates were produced")
+
+    def preference_key(candidate: AlignmentCandidate):
+        # Prefer the physically better fit first. If two hypotheses tie exactly,
+        # keep the original orientation-preserving model for stability.
+        hypothesis_penalty = 0 if candidate.name == "normal" else 1
+        return (
+            -candidate.num_inliers,
+            candidate.rmse_m,
+            candidate.max_m,
+            candidate.mean_m,
+            hypothesis_penalty,
+        )
+
+    return min(candidates, key=preference_key)
 
 
 def testmap_pixel_to_world(
@@ -208,6 +320,7 @@ class ManualAlignmentUI:
         field_width_m: float,
         field_height_m: float,
         lidar_meta: TopDownMeta,
+        orientation_mode: str,
     ):
         self.testmap_original = testmap_bgr
         self.lidar_original = lidar_topdown_bgr
@@ -219,6 +332,7 @@ class ManualAlignmentUI:
         self.field_width_m = field_width_m
         self.field_height_m = field_height_m
         self.lidar_meta = lidar_meta
+        self.orientation_mode = orientation_mode
 
         self.testmap_panel, self.testmap_scale = resize_for_panel(
             self.testmap_original, LEFT_PANEL_MAX_W, PANEL_MAX_H
@@ -359,7 +473,7 @@ class ManualAlignmentUI:
         )
         cv2.putText(
             canvas,
-            f"PCD: {self.pcd_path.name}  |  Top-down resolution: {self.lidar_meta.resolution_m_per_px:.3f} m/px",
+            f"PCD: {self.pcd_path.name}  |  Top-down resolution: {self.lidar_meta.resolution_m_per_px:.3f} m/px  |  orientation_mode: {self.orientation_mode}",
             (18, 118),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.6,
@@ -417,9 +531,13 @@ class ManualAlignmentUI:
 
         if self.saved_result is not None:
             error = self.saved_result["error"]
+            saved_mode = (
+                self.saved_result.get("orientation_hypothesis", {}).get("selected", "normal")
+            )
             cv2.putText(
                 canvas,
-                "Saved: rmse={:.3f}m max={:.3f}m scale={:.4f} rot={:.2f}deg".format(
+                "Saved: mode={} rmse={:.3f}m max={:.3f}m scale={:.4f} rot={:.2f}deg".format(
+                    saved_mode,
                     error["rmse_m"],
                     error["max_m"],
                     self.saved_result["similarity_transform"]["scale"],
@@ -467,26 +585,22 @@ class ManualAlignmentUI:
 
         src = np.asarray(testmap_world, dtype=np.float64)
         dst = np.asarray(lidar_world, dtype=np.float64)
-        matrix_2x3, inlier_mask = cv2.estimateAffinePartial2D(
-            src.reshape(-1, 1, 2),
-            dst.reshape(-1, 1, 2),
-            method=cv2.RANSAC,
-            ransacReprojThreshold=0.25,
-            maxIters=5000,
-            confidence=0.999,
-            refineIters=100,
-        )
-        if matrix_2x3 is None:
-            raise RuntimeError("Failed to solve similarity transform. Try different landmarks.")
 
-        aligned = (matrix_2x3[:, :2] @ src.T).T + matrix_2x3[:, 2]
-        errors = np.linalg.norm(aligned - dst, axis=1)
-        rmse_m = float(np.sqrt(np.mean(np.square(errors))))
-        max_m = float(np.max(errors))
+        if self.orientation_mode == "normal":
+            candidate_specs = [("normal", np.eye(3, dtype=np.float64))]
+        elif self.orientation_mode == "flip_x":
+            candidate_specs = [("flip_x", build_flip_x_pre_transform(self.field_width_m))]
+        else:
+            candidate_specs = [
+                ("normal", np.eye(3, dtype=np.float64)),
+                ("flip_x", build_flip_x_pre_transform(self.field_width_m)),
+            ]
 
-        scale, rotation_rad, tx, ty = similarity_matrix_to_components(matrix_2x3)
-        matrix_3x3 = np.eye(3, dtype=np.float64)
-        matrix_3x3[:2, :] = matrix_2x3
+        candidates = [
+            solve_similarity_candidate(src, dst, pre_transform=pre_transform, name=name)
+            for name, pre_transform in candidate_specs
+        ]
+        best_candidate = choose_best_candidate(candidates)
 
         topdown_affine = build_world_to_topdown_pixel_affine(self.lidar_meta)
         testmap_affine = build_testmap_pixel_to_world_affine(
@@ -495,7 +609,7 @@ class ManualAlignmentUI:
             self.field_width_m,
             self.field_height_m,
         )
-        preview_matrix = topdown_affine @ matrix_3x3 @ testmap_affine
+        preview_matrix = topdown_affine @ best_candidate.runtime_matrix_3x3 @ testmap_affine
         warped_testmap = cv2.warpPerspective(
             self.testmap_original,
             preview_matrix,
@@ -511,7 +625,7 @@ class ManualAlignmentUI:
         cv2.imwrite(str(self.preview_png_path), preview)
 
         result = {
-            "format_version": 1,
+            "format_version": 2,
             "saved_at_epoch_s": time.time(),
             "source_frame": "testmap_metric",
             "target_frame": "rm_frame",
@@ -538,20 +652,43 @@ class ManualAlignmentUI:
                 "padding_m": float(self.lidar_meta.padding_m),
                 "point_count": int(self.lidar_meta.point_count),
             },
+            "orientation_hypothesis": {
+                "mode": self.orientation_mode,
+                "selected": best_candidate.name,
+                "pre_transform_matrix_3x3": best_candidate.pre_transform.tolist(),
+                "candidate_metrics": [
+                    {
+                        "name": candidate.name,
+                        "num_inliers": int(candidate.num_inliers),
+                        "rmse_m": float(candidate.rmse_m),
+                        "max_m": float(candidate.max_m),
+                        "mean_m": float(candidate.mean_m),
+                        "scale": float(candidate.scale),
+                        "rotation_rad": float(candidate.rotation_rad),
+                        "rotation_deg": float(np.degrees(candidate.rotation_rad)),
+                        "translation_x_m": float(candidate.translation_x_m),
+                        "translation_y_m": float(candidate.translation_y_m),
+                    }
+                    for candidate in candidates
+                ],
+            },
             "similarity_transform": {
-                "scale": float(scale),
-                "rotation_rad": float(rotation_rad),
-                "rotation_deg": float(np.degrees(rotation_rad)),
-                "translation_x_m": float(tx),
-                "translation_y_m": float(ty),
-                "matrix_3x3": matrix_3x3.tolist(),
+                "scale": float(best_candidate.scale),
+                "rotation_rad": float(best_candidate.rotation_rad),
+                "rotation_deg": float(np.degrees(best_candidate.rotation_rad)),
+                "translation_x_m": float(best_candidate.translation_x_m),
+                "translation_y_m": float(best_candidate.translation_y_m),
+                "matrix_3x3": best_candidate.similarity_matrix_3x3.tolist(),
+            },
+            "runtime_transform": {
+                "matrix_3x3": best_candidate.runtime_matrix_3x3.tolist(),
             },
             "error": {
-                "rmse_m": rmse_m,
-                "max_m": max_m,
-                "mean_m": float(np.mean(errors)),
+                "rmse_m": best_candidate.rmse_m,
+                "max_m": best_candidate.max_m,
+                "mean_m": best_candidate.mean_m,
                 "num_pairs": int(len(self.pairs)),
-                "num_inliers": int(np.count_nonzero(inlier_mask)) if inlier_mask is not None else int(len(self.pairs)),
+                "num_inliers": int(best_candidate.num_inliers),
             },
             "correspondences": correspondence_entries,
         }
@@ -563,13 +700,26 @@ class ManualAlignmentUI:
         print(f"Saved alignment YAML: {self.output_yaml_path}")
         print(f"Saved LiDAR top-down image: {self.topdown_png_path}")
         print(f"Saved preview overlay: {self.preview_png_path}")
+        for candidate in candidates:
+            print(
+                "Candidate {}: inliers={} rmse={:.3f} m max={:.3f} m scale={:.6f} rot={:.3f} deg".format(
+                    candidate.name,
+                    candidate.num_inliers,
+                    candidate.rmse_m,
+                    candidate.max_m,
+                    candidate.scale,
+                    np.degrees(candidate.rotation_rad),
+                )
+            )
         print(
-            "Similarity: scale={:.6f}, rotation={:.3f} deg, translation=({:.3f}, {:.3f}) m, rmse={:.3f} m".format(
-                scale,
-                np.degrees(rotation_rad),
-                tx,
-                ty,
-                rmse_m,
+            "Selected {} hypothesis. Runtime transform rmse={:.3f} m, max={:.3f} m. Similarity(after pre-transform): scale={:.6f}, rotation={:.3f} deg, translation=({:.3f}, {:.3f}) m".format(
+                best_candidate.name,
+                best_candidate.rmse_m,
+                best_candidate.max_m,
+                best_candidate.scale,
+                np.degrees(best_candidate.rotation_rad),
+                best_candidate.translation_x_m,
+                best_candidate.translation_y_m,
             )
         )
 
@@ -653,6 +803,12 @@ def parse_args() -> argparse.Namespace:
         default=str(repo_root / "config" / "local" / "testmap_to_rm_frame.yaml"),
         help="Output YAML path for the saved similarity transform.",
     )
+    parser.add_argument(
+        "--orientation-mode",
+        choices=("auto", "normal", "flip_x"),
+        default="auto",
+        help="How to handle testmap handedness before fitting. 'auto' tries both the original and an x-flipped testmap metric frame.",
+    )
     return parser.parse_args()
 
 
@@ -693,6 +849,7 @@ def main() -> int:
         field_width_m=float(args.field_width_m),
         field_height_m=float(args.field_height_m),
         lidar_meta=lidar_meta,
+        orientation_mode=str(args.orientation_mode),
     )
     ui.run()
     return 0

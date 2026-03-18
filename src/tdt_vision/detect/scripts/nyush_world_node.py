@@ -31,6 +31,11 @@ from vision_interface.msg import DetectResult
 DEFAULT_NYUSH_PATH = "/home/nyu/Desktop/NYUSH_Robotics_RM_RadarStation"
 TESTMAP_FIELD_WIDTH_M = 6.79
 TESTMAP_FIELD_HEIGHT_M = 3.82
+ALIGNMENT_REPROJECTION_INLIER_THRESHOLD_M = 0.25
+ALIGNMENT_MAX_RMSE_M = 0.5
+ALIGNMENT_MAX_POINT_ERROR_M = 1.0
+ALIGNMENT_MIN_INLIER_COUNT = 3
+ALIGNMENT_MIN_INLIER_RATIO = 0.75
 
 
 class SlidingWindowFilter:
@@ -40,17 +45,16 @@ class SlidingWindowFilter:
         self.window = {}
         self.last_update = {}
 
-    def add_data(self, name: str, x: float, y: float) -> None:
+    def add_data(self, name: str, x: float, y: float, stamp_sec: float) -> None:
         if name not in self.window:
             self.window[name] = deque(maxlen=self.window_size)
         self.window[name].append((x, y))
-        self.last_update[name] = time.time()
+        self.last_update[name] = stamp_sec
 
-    def get_all_data(self):
+    def get_all_data(self, current_time_sec: float):
         filtered = {}
-        now = time.time()
         for name, samples in list(self.window.items()):
-            if now - self.last_update.get(name, 0.0) > self.max_inactive_time:
+            if current_time_sec - self.last_update.get(name, 0.0) > self.max_inactive_time:
                 samples.clear()
                 continue
             if len(samples) < self.window_size:
@@ -76,7 +80,7 @@ class NYUSHWorldNode(Node):
         self.declare_parameter("field_height_m", TESTMAP_FIELD_HEIGHT_M)
         self.declare_parameter("calibration_width_px", 0)
         self.declare_parameter("calibration_height_px", 0)
-        self.declare_parameter("window_size", 3)
+        self.declare_parameter("window_size", 1)
         self.declare_parameter("max_inactive_time", 2.0)
         self.declare_parameter("diagnostic_log_every_sec", 2.0)
         self.declare_parameter("publish_debug_image", True)
@@ -155,6 +159,7 @@ class NYUSHWorldNode(Node):
         self._processing_image = False
         self._last_process_started_monotonic = 0.0
         self._last_process_duration_ms = 0.0
+        self._warned_zero_header_stamp = False
         self.clahe = cv2.createCLAHE(clipLimit=1.5, tileGridSize=(8, 8)) if self.brightness_clahe else None
         self.brightness_lut = self._build_brightness_lut()
 
@@ -287,6 +292,17 @@ class NYUSHWorldNode(Node):
 
     def _queue_image_callback(self, msg: Image):
         self._latest_image_msg = msg
+
+    def _stamp_to_seconds(self, stamp) -> float:
+        stamp_sec = float(stamp.sec) + float(stamp.nanosec) * 1e-9
+        if stamp_sec > 0.0:
+            return stamp_sec
+        if not self._warned_zero_header_stamp:
+            self.get_logger().warning(
+                "camera_image header.stamp is zero; falling back to node clock for SlidingWindowFilter timing"
+            )
+            self._warned_zero_header_stamp = True
+        return self.get_clock().now().nanoseconds / 1e9
 
     def _process_latest_image(self):
         if self._processing_image or self._latest_image_msg is None:
@@ -596,9 +612,16 @@ class NYUSHWorldNode(Node):
         try:
             with config_path.open("r", encoding="utf-8") as f:
                 data = yaml.safe_load(f) or {}
-            matrix = np.asarray(
-                data["similarity_transform"]["matrix_3x3"], dtype=np.float64
-            )
+
+            runtime_transform = data.get("runtime_transform", {}) or {}
+            similarity_transform = data.get("similarity_transform", {}) or {}
+            matrix_source = "runtime_transform.matrix_3x3"
+            matrix_data = runtime_transform.get("matrix_3x3")
+            if matrix_data is None:
+                matrix_source = "similarity_transform.matrix_3x3"
+                matrix_data = similarity_transform["matrix_3x3"]
+
+            matrix = np.asarray(matrix_data, dtype=np.float64)
             if matrix.shape != (3, 3):
                 raise ValueError(f"matrix_3x3 must be 3x3, got {matrix.shape}")
 
@@ -619,21 +642,39 @@ class NYUSHWorldNode(Node):
                     )
                 )
 
-            self.testmap_rm_alignment_matrix = matrix
-            self.testmap_rm_alignment_scale = float(
-                data.get("similarity_transform", {}).get("scale", 1.0)
+            metrics = self._evaluate_testmap_rm_alignment_metrics(data, matrix)
+            if metrics is not None:
+                validation_error = self._validate_testmap_rm_alignment_metrics(metrics)
+                if validation_error is not None:
+                    self.get_logger().warning(
+                        "Rejecting testmap rm_frame alignment %s: %s. "
+                        "Publishing raw testmap metric coordinates on /resolve_result."
+                        % (config_path, validation_error)
+                    )
+                    return
+
+            orientation_info = data.get("orientation_hypothesis", {}) or {}
+            selected_orientation = str(
+                orientation_info.get(
+                    "selected",
+                    "normal" if matrix_source == "runtime_transform.matrix_3x3" else "legacy",
+                )
             )
+            self.testmap_rm_alignment_matrix = matrix
+            self.testmap_rm_alignment_scale = float(similarity_transform.get("scale", 1.0))
             self.testmap_rm_alignment_rotation_deg = float(
-                data.get("similarity_transform", {}).get("rotation_deg", 0.0)
+                similarity_transform.get("rotation_deg", 0.0)
             )
             self.testmap_rm_alignment_translation = (
-                float(data.get("similarity_transform", {}).get("translation_x_m", 0.0)),
-                float(data.get("similarity_transform", {}).get("translation_y_m", 0.0)),
+                float(similarity_transform.get("translation_x_m", 0.0)),
+                float(similarity_transform.get("translation_y_m", 0.0)),
             )
             self.testmap_rm_alignment_loaded = True
             self.testmap_rm_alignment_summary = (
-                "scale=%.4f rot=%.2fdeg tx=%.3f ty=%.3f"
+                "mode=%s source=%s scale=%.4f rot=%.2fdeg tx=%.3f ty=%.3f"
                 % (
+                    selected_orientation,
+                    matrix_source,
                     self.testmap_rm_alignment_scale,
                     self.testmap_rm_alignment_rotation_deg,
                     self.testmap_rm_alignment_translation[0],
@@ -650,6 +691,97 @@ class NYUSHWorldNode(Node):
                 "publishing raw testmap metric coordinates on /resolve_result."
                 % (config_path, exc)
             )
+
+    def _evaluate_testmap_rm_alignment_metrics(
+        self, data: dict, matrix: np.ndarray
+    ) -> dict | None:
+        correspondences = data.get("correspondences") or []
+        src_points = []
+        dst_points = []
+        for entry in correspondences:
+            try:
+                src_points.append(entry["testmap_world_m"])
+                dst_points.append(entry["rm_frame_world_m"])
+            except (KeyError, TypeError):
+                continue
+
+        if len(src_points) >= 3:
+            src = np.asarray(src_points, dtype=np.float64)
+            dst = np.asarray(dst_points, dtype=np.float64)
+            src_h = np.concatenate(
+                [src, np.ones((src.shape[0], 1), dtype=np.float64)],
+                axis=1,
+            )
+            aligned_h = (matrix @ src_h.T).T
+            if np.any(np.abs(aligned_h[:, 2]) < 1e-12):
+                raise ValueError("alignment matrix maps correspondences to infinity")
+            aligned = aligned_h[:, :2] / aligned_h[:, 2:3]
+            errors = np.linalg.norm(aligned - dst, axis=1)
+            return {
+                "source": "correspondences",
+                "num_pairs": int(errors.shape[0]),
+                "num_inliers": int(
+                    np.count_nonzero(
+                        errors <= ALIGNMENT_REPROJECTION_INLIER_THRESHOLD_M
+                    )
+                ),
+                "rmse_m": float(np.sqrt(np.mean(np.square(errors)))),
+                "max_m": float(np.max(errors)),
+            }
+
+        error = data.get("error", {}) or {}
+        if not error:
+            return None
+
+        num_pairs = int(error.get("num_pairs", 0))
+        num_inliers = int(error.get("num_inliers", num_pairs))
+        return {
+            "source": "yaml_error",
+            "num_pairs": num_pairs,
+            "num_inliers": num_inliers,
+            "rmse_m": float(error.get("rmse_m", float("inf"))),
+            "max_m": float(error.get("max_m", float("inf"))),
+        }
+
+    def _validate_testmap_rm_alignment_metrics(self, metrics: dict) -> str | None:
+        num_pairs = int(metrics["num_pairs"])
+        num_inliers = int(metrics["num_inliers"])
+        rmse_m = float(metrics["rmse_m"])
+        max_m = float(metrics["max_m"])
+        required_inliers = max(
+            ALIGNMENT_MIN_INLIER_COUNT,
+            int(np.ceil(num_pairs * ALIGNMENT_MIN_INLIER_RATIO)),
+        )
+
+        failures = []
+        if num_pairs < 3:
+            failures.append(f"only {num_pairs} correspondence pairs are available")
+        if num_inliers < required_inliers:
+            failures.append(
+                "only %d/%d correspondences are within %.2f m (need at least %d)"
+                % (
+                    num_inliers,
+                    num_pairs,
+                    ALIGNMENT_REPROJECTION_INLIER_THRESHOLD_M,
+                    required_inliers,
+                )
+            )
+        if rmse_m > ALIGNMENT_MAX_RMSE_M:
+            failures.append(
+                "rmse %.3f m exceeds %.3f m" % (rmse_m, ALIGNMENT_MAX_RMSE_M)
+            )
+        if max_m > ALIGNMENT_MAX_POINT_ERROR_M:
+            failures.append(
+                "max error %.3f m exceeds %.3f m"
+                % (max_m, ALIGNMENT_MAX_POINT_ERROR_M)
+            )
+
+        if not failures:
+            return None
+        return "%s [%s]" % (
+            "; ".join(failures),
+            metrics.get("source", "unknown"),
+        )
 
     def _mapped_point_to_display(self, mapped_point: np.ndarray):
         map_x = float(mapped_point[0][0][0])
@@ -681,26 +813,26 @@ class NYUSHWorldNode(Node):
             return 5
         return None
 
-    def _add_map_point(self, cls_name: str, camera_point: np.ndarray):
+    def _add_map_point(self, cls_name: str, camera_point: np.ndarray, stamp_sec: float):
         mapped_point = cv2.perspectiveTransform(camera_point.reshape(1, 1, 2), self.m_ground)
         x_c, y_c = self._clamp_display_point(mapped_point)
         color = self.mask_image[y_c, x_c]
         if int(color[0]) == int(color[1]) == int(color[2]) == 0:
-            self.filter.add_data(cls_name, x_c, y_c)
+            self.filter.add_data(cls_name, x_c, y_c, stamp_sec)
             return
 
         mapped_point = cv2.perspectiveTransform(camera_point.reshape(1, 1, 2), self.m_height_r)
         x_c, y_c = self._clamp_display_point(mapped_point)
         color = self.mask_image[y_c, x_c]
         if int(color[1]) > int(color[0]) and int(color[1]) > int(color[2]):
-            self.filter.add_data(cls_name, x_c, y_c)
+            self.filter.add_data(cls_name, x_c, y_c, stamp_sec)
             return
 
         mapped_point = cv2.perspectiveTransform(camera_point.reshape(1, 1, 2), self.m_height_g)
         x_c, y_c = self._clamp_display_point(mapped_point)
         color = self.mask_image[y_c, x_c]
         if int(color[0]) > int(color[1]) and int(color[0]) > int(color[2]):
-            self.filter.add_data(cls_name, x_c, y_c)
+            self.filter.add_data(cls_name, x_c, y_c, stamp_sec)
 
     def _map_pixel_to_world(self, pixel_x: float, pixel_y: float):
         if self.map_mode == "testmap":
@@ -895,6 +1027,7 @@ class NYUSHWorldNode(Node):
     def image_callback(self, msg: Image):
         try:
             self.frame_count += 1
+            message_time_sec = self._stamp_to_seconds(msg.header.stamp)
             should_publish_debug = (
                 self.debug_image_pub is not None
                 and self.frame_count % self.debug_image_every_n == 0
@@ -967,7 +1100,7 @@ class NYUSHWorldNode(Node):
                     camera_point = np.array(
                         [[[center_x * scale_x, center_y * scale_y]]], dtype=np.float32
                     )
-                    self._add_map_point(armor_cls, camera_point)
+                    self._add_map_point(armor_cls, camera_point, message_time_sec)
 
                     if should_publish_debug:
                         label_color = (255, 0, 0) if armor_cls.startswith("B") else (0, 0, 255)
@@ -989,7 +1122,7 @@ class NYUSHWorldNode(Node):
             raw_world_result.red_x = [0.0] * 6
             raw_world_result.red_y = [0.0] * 6
 
-            filtered_tracks = self.filter.get_all_data()
+            filtered_tracks = self.filter.get_all_data(message_time_sec)
             for cls_name, pixel_xy in filtered_tracks.items():
                 if pixel_xy is None:
                     continue

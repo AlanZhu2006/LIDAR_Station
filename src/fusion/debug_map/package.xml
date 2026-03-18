@@ -16,6 +16,7 @@
   <depend>OpenCV</depend>
   <depend>sensor_msgs</depend>
   <depend>cv_bridge</depend>
+  <depend>yaml-cpp</depend>
   
   <export>
     <build_type>ament_cmake</build_type>

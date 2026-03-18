@@ -3,10 +3,12 @@
 WAIT_TIMEOUT="${IMAGE_VIEW_WAIT_TIMEOUT_SEC:-30}"
 PUBLISH_DEBUG_IMAGE="${PUBLISH_DEBUG_IMAGE:-true}"
 PUBLISH_DEBUG_MAP="${PUBLISH_DEBUG_MAP:-true}"
+LAUNCH_DEBUG_MAP="${LAUNCH_DEBUG_MAP:-false}"
 
 topics_to_wait=()
 [[ "$PUBLISH_DEBUG_IMAGE" == "true" ]] && topics_to_wait+=("/detect_image")
 [[ "$PUBLISH_DEBUG_MAP" == "true" ]] && topics_to_wait+=("/nyush_map_image")
+[[ "$LAUNCH_DEBUG_MAP" == "true" ]] && topics_to_wait+=("/map_2d")
 
 if ((${#topics_to_wait[@]} == 0)); then
   echo ">>> No debug image topics enabled. Opening rqt_image_view immediately."

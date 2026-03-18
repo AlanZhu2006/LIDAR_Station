@@ -39,7 +39,7 @@
   -> cluster
   -> kalman_filter
   -> /livox/lidar_kalman
-  -> /kalman_detect
+  -> /kalman_detect (rm_frame fused positions for debug_map)
 
 /resolve_result + /livox/lidar_cluster
   -> kalman_filter 中的位置匹配
@@ -441,7 +441,7 @@ rviz2 -d ~/Desktop/RadarStation/src/livox_ros_driver2/config/pointcloud_lidar.rv
 cd ~/Desktop/RadarStation
 source /opt/ros/humble/setup.bash
 source install/setup.bash
-ros2 run debug_map debug_map_node
+ros2 run debug_map debug_map
 ```
 
 ### 9.2 一键脚本什么时候用
@@ -515,7 +515,7 @@ ros2 topic list | rg "camera_image|resolve_result|livox/lidar|livox/lidar_cluste
 - `/livox/lidar`
 - `/livox/lidar_cluster`
 - `/livox/lidar_kalman`
-- `/kalman_detect`
+- `/kalman_detect`  # debug_map 现在把它画在对齐后的 NYUSH 2D 地图上
 
 ### 10.2 频率检查
 

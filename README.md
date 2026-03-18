@@ -86,7 +86,7 @@
 - **默认 LiDAR 启动方式**：`lidar.launch.py`
 - **默认不开倾斜修正**：当前这套实机数据里原始 `/livox/lidar` 已基本水平，只有在原始点云本身 visibly tilted 时才启用 `lidar_tilt.launch.py`
 - **RViz 自动摆正只影响显示**：`auto_align:=true` 会发布 `rm_frame_display`，便于看平地面，但不替代地图/GICP 配准
-- **动态检测默认改为机器人优先**：`start_fusion.sh` 现在默认使用 `kd_tree_threshold_sq=0.15`、`min_cluster_size=8`，比旧版更容易保留低矮移动机器人
+- **动态检测默认改为更激进检出**：`start_fusion.sh` 现在默认使用 `publish_freq=5.0`、`accumulate_time=3`、`publish_accumulated_dynamic_cloud=true`、`kd_tree_threshold_sq=0.12`、`cluster_tolerance=0.30`、`min_cluster_size=4`，优先保留远处稀疏目标
 - **视觉侧默认 testmap 尺度**：`field_width_m=3.82`、`field_height_m=6.79`
 - **视觉侧颜色方向必须匹配己方**：`SELF_COLOR=R` 或 `SELF_COLOR=B`
 
@@ -103,8 +103,8 @@ SELF_COLOR=R ./scripts/start_fusion.sh
 # 原始 /livox/lidar 本身就是斜的时才开
 USE_TILT_CORRECTION=true SELF_COLOR=R ./scripts/start_fusion.sh
 
-# 若人能出轨迹、机器人难出轨迹，先把检测调激进
-KD_TREE_THRESHOLD_SQ=0.12 MIN_CLUSTER_SIZE=6 SELF_COLOR=R ./scripts/start_fusion.sh
+# 若人能出轨迹、机器人难出轨迹，先把检测再调激进
+KD_TREE_THRESHOLD_SQ=0.10 MIN_CLUSTER_SIZE=4 SELF_COLOR=R ./scripts/start_fusion.sh
 
 # 若 testmap 是别的缩比场地，显式覆盖视觉坐标缩放
 FIELD_WIDTH_M=9.6 FIELD_HEIGHT_M=5.4 SELF_COLOR=R ./scripts/start_fusion.sh
@@ -837,8 +837,8 @@ ros2 run rqt_image_view rqt_image_view
 
 ```bash
 # 在融合运行后
-ros2 run debug_map debug_map_node
-# 订阅 /kalman_detect，在 config/RM2024.png 上绘制红/蓝方位置和编号
+ros2 run debug_map debug_map
+# 订阅 /kalman_detect，在对齐到 rm_frame 的 NYUSH runtime map 上绘制敌方融合位置和编号
 # 需先 colcon build --packages-select debug_map
 ```
 
@@ -858,7 +858,7 @@ ros2 run debug_map debug_map_node
 | /livox/lidar_dynamic | 动态点云 |
 | /livox/lidar_cluster | 聚类中心，Kalman 订阅 |
 | /livox/lidar_kalman | 卡尔曼跟踪（XYZRGB）|
-| /kalman_detect | 融合结果，供 debug_map |
+| /kalman_detect | 融合结果（rm_frame 坐标），供 debug_map 在对齐后的 NYUSH 地图上显示 |
 | /resolve_result | 相机世界坐标，融合必需 |
 
 ### 常见问题速查
@@ -1316,7 +1316,7 @@ detect_callback：对每个红/蓝点 (i=0~5 对应英雄/工程/步兵/哨兵)
 | 区域地图 | ✅ | `map_file` 可指定任意 PCD 地图（如 `config/RM2024.pcd` 或自建图） |
 | 旋转且移动的机器人 | ✅ | dynamic_cloud 提取动态点，cluster 聚类，kalman 跟踪 |
 | 精确识别机器人 | ✅ | 雷达 + 相机融合，可区分红/蓝方及编号 |
-| 位置准确标识在区域地图上 | ✅ | 输出为 `rm_frame` 地图坐标，debug_map 在 2D 地图上显示 |
+| 位置准确标识在区域地图上 | ✅ | 输出为 `rm_frame` 地图坐标，debug_map 在对齐后的 NYUSH 2D 地图上显示 |
 
 ### 机器人类型与编号
 
@@ -1335,11 +1335,11 @@ RoboMaster 装甲板编号与机器人类型对应（索引 0–5）：
 
 1. 启动完整融合：Livox + 相机 + localization + dynamic_cloud + cluster + kalman_filter  
 2. 相机发布 `/resolve_result`：包含红/蓝装甲板 2D 位置及编号  
-3. 启动 debug_map：订阅 `/kalman_detect`，在 `config/RM2024.png` 上绘制红/蓝方位置和编号  
+3. 启动 debug_map：订阅 `/kalman_detect`，在对齐到 `rm_frame` 的 NYUSH runtime map 上绘制敌方融合位置和编号  
 
 ```bash
 # 启动 debug_map 节点（若未在 launch 中）
-ros2 run debug_map debug_map_node
+ros2 run debug_map debug_map
 ```
 
 ---
@@ -1787,7 +1787,7 @@ python onnx2engine.py
 推荐从这里开始：
 
 ```bash
-KD_TREE_THRESHOLD_SQ=0.15 MIN_CLUSTER_SIZE=8 SELF_COLOR=R ./scripts/start_fusion.sh
+KD_TREE_THRESHOLD_SQ=0.15 MIN_CLUSTER_SIZE=6 SELF_COLOR=R ./scripts/start_fusion.sh
 ```
 
 若仍不够激进：
@@ -1976,6 +1976,20 @@ NYUSH_Robotics_RM_RadarStation/
 - [x] 标定界面亮度增强（CLAHE + gamma + bias）
 - [x] NYUSH 运行时标定分辨率自动/显式对齐
 
+### 2026-03-18 实机联调进展
+
+| 模块 | 文件 | 修改 / 结论 |
+|------|------|-------------|
+| Alignment audit | `docs/CURRENT_BUG.md` / `docs/RADAR_LIDAR_TIME_ALIGNMENT_AUDIT.md` | 新增两份 2026-03-18 审计文档，分别记录 testmap→`rm_frame` 对齐问题与相机/LiDAR 时间对齐问题，明确 repo 当前症状、根因和建议修复顺序 |
+| 标定工具 | `src/tdt_vision/detect/scripts/calibrate_testmap_lidar_alignment.py` | 新增 `normal` / `flip_x` / `auto` 朝向假设，保存 `candidate_metrics`、`orientation_hypothesis` 和 `runtime_transform.matrix_3x3`；当前本地 testmap 对齐已能自动识别 handedness 冲突，选中 `flip_x` 后误差降到 `rmse≈0.036m`、`max≈0.048m` |
+| NYUSH runtime | `src/tdt_vision/detect/scripts/nyush_world_node.py` / `src/tdt_vision/launch/nyush_integration.launch.py` | 运行时优先读取 `runtime_transform.matrix_3x3`，并用保存的 correspondences / error 重新验收对齐文件；坏 YAML 会被拒绝并回退到 raw testmap metric；SlidingWindow 改按 message stamp 计时，默认 `window_size=1`，降低时间模糊 |
+| Camera timing | `src/hik_camera/src/hik_camera_node.cpp` | 取帧成功时先记录 `capture_stamp`，后续转换/缩放/LUT 结束后仍复用同一时间戳发布，减少 host 侧处理延迟继续污染图像时间戳 |
+| Kalman fusion | `src/fusion/kalman_filter/include/filter_plus.h` / `src/fusion/kalman_filter/include/kalman_filter.h` / `src/fusion/kalman_filter/src/kalman_filter.cpp` | 相机 detect cache 改为按时间排序的短队列，LiDAR 回调会挑最近 camera stamp 而不是只吃 latest；新增 `camera_time_match_threshold`、`detect_queue_max_age`、`detect_queue_max_size`、`use_smoothed_camera_match_point`、`self_color` 等运行时参数；调试日志能区分“队列里有 detect 但时间差超阈值”和“空间距离不匹配” |
+| LiDAR detection | `src/lidar/dynamic_cloud/include/dynamic_cloud.h` / `src/lidar/dynamic_cloud/src/dynamic_cloud.cpp` / `src/lidar/dynamic_cloud/launch/lidar.launch.py` / `src/lidar/dynamic_cloud/launch/lidar_tilt.launch.py` / `src/lidar/cluster/include/cluster.h` / `src/lidar/cluster/src/cluster.cpp` | `dynamic_cloud` 默认回到单帧输出（`accumulate_time=1`、`publish_accumulated_dynamic_cloud=false`），TF 先按 cloud stamp 查找再回退 latest，`/livox/lidar_other` header 补齐；`cluster` 默认 `min_cluster_size=6` 并新增 `4-5` 点 small-cluster recovery，降低低矮机器人和远处稀疏目标漏检 |
+| DebugMap | `src/fusion/debug_map/CMakeLists.txt` / `src/fusion/debug_map/package.xml` / `src/fusion/debug_map/debug_map.cpp` | `debug_map` 改为基于 YAML 对齐后的 NYUSH runtime map 绘制 `/kalman_detect`，运行时会拒绝明显错误的 warp；新增 `yaml-cpp` 依赖，保留 legacy `Radar2Sentry` 转发，统一可视化输出 `/map_2d` |
+| One-click / operator path | `scripts/start_fusion.sh` / `scripts/wait_for_image_topics.sh` / `scripts/diagnose_detection.sh` / `docs/LIDAR.txt` / `docs/RADAR_STATION_INTEGRATED_WORKFLOW.md` | 一键脚本统一传入更多融合调试参数；普通模式默认改为更激进的远距检出 preset：`publish_freq=5.0`、`voxel=0.35`、`accumulate=3`、`publish_accumulated_dynamic_cloud=true`、`kd_tree_threshold_sq=0.12`、`cluster_tolerance=0.30`、`min_cluster_size=4`；可选启动 `debug_map`，`rqt_image_view` 会额外等待 `/map_2d`；排障脚本文案同步更新 |
+| Runtime assets | `mapping_ws/test.pcd` | 当前运行地图 `test.pcd` 已刷新为最新实机版本，并继续作为 `start_fusion.sh` 的默认地图输入 |
+
 ### 2026-03-17 实机联调进展
 
 | 模块 | 文件 | 修改 / 结论 |
@@ -2021,6 +2035,27 @@ NYUSH_Robotics_RM_RadarStation/
 ---
 
 ## 更新日志
+
+### 2026-03-18
+
+- **testmap→rm_frame 对齐链路补齐“求解 + 验收 + 运行时保护”**
+  - `calibrate_testmap_lidar_alignment.py` 新增 `orientation-mode`，会同时尝试正常朝向和 `flip_x` 假设
+  - 输出新增 `runtime_transform.matrix_3x3` 和候选误差统计，运行时不再盲信旧 YAML
+  - `nyush_world_node.py` / `debug_map.cpp` 都会拒绝明显不合格的对齐文件，避免坏 warp 继续污染 `/resolve_result` 和 `/map_2d`
+- **相机/LiDAR 融合时间语义更明确**
+  - `hik_camera_node` 改为在取帧成功时立即记录并复用时间戳
+  - `kalman_filter` 把单个 latest detect 改成短队列，并按与 LiDAR 最近的 stamp 选配对
+  - 新增 `camera_time_match_threshold`、`detect_queue_max_age`、`detect_queue_max_size`、`use_smoothed_camera_match_point`，便于继续压紧时间门限
+- **LiDAR 链路继续分成“时间正确”和“检出激进”两层**
+  - launch / `dynamic_cloud` 默认回到单帧动态点云，减少“多帧混成一帧”的时间模糊
+  - `cluster` 默认 `min_cluster_size=6` 并增加 `4-5` 点 small-cluster recovery，兼顾小机器人检出
+  - `start_fusion.sh` 普通模式则提供更激进的 operator preset：`5Hz + accumulate=3 + publish_accumulated_dynamic_cloud + kd_tree_threshold_sq=0.12 + cluster_tolerance=0.30 + min_cluster_size=4`
+- **2D 调试图改成真正服务当前 testmap 工作流**
+  - `debug_map` 现在画的是对齐到 `rm_frame` 的 NYUSH runtime map，而不是旧 `RM2024.png`
+  - 一键脚本可直接拉起 `debug_map`，`wait_for_image_topics.sh` 会同步等待 `/map_2d`
+- **审计与交接文档补齐**
+  - 新增 `docs/CURRENT_BUG.md` 记录 testmap 对齐问题和已落地修复
+  - 新增 `docs/RADAR_LIDAR_TIME_ALIGNMENT_AUDIT.md` 记录时间对齐审计结论和后续建议
 
 ### 2026-03-17
 
@@ -2097,7 +2132,7 @@ NYUSH_Robotics_RM_RadarStation/
 **3. 误判过滤**
 
 - **kd_tree_threshold_sq**：与地图最近邻平方距离阈值，当前 launch 默认回到 `0.15`，优先保留低矮机器人
-- **cluster MinClusterSize**：launch 默认 `12`，`start_fusion.sh` 当前覆盖为 `8`，减少小机器人漏检
+- **cluster MinClusterSize**：launch 与 `start_fusion.sh` 当前默认都为 `6`，并带小簇恢复路径，减少小机器人漏检
 
 **4. Kalman 漂移修复（filter_plus.h）**
 
@@ -2151,4 +2186,4 @@ NYUSH_Robotics_RM_RadarStation/
 
 ---
 
-*最后更新: 2026-03-17*
+*最后更新: 2026-03-18*

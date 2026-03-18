@@ -14,10 +14,10 @@ DynamicCloud::DynamicCloud(const rclcpp::NodeOptions& node_options):rclcpp::Node
     this->declare_parameter<std::string>("point_cloud_topic", "/livox/lidar");
     this->declare_parameter<double>("ceiling_z_max", 100.0);
     this->declare_parameter<double>("voxel_leaf_size", 0.25);
-    this->declare_parameter<double>("kd_tree_threshold_sq", 0.28);
+    this->declare_parameter<double>("kd_tree_threshold_sq", 0.15);
     this->declare_parameter<int>("process_every_n", 1);
-    this->declare_parameter<int>("accumulate_time", 3);
-    this->declare_parameter<bool>("publish_accumulated_dynamic_cloud", true);
+    this->declare_parameter<int>("accumulate_time", 1);
+    this->declare_parameter<bool>("publish_accumulated_dynamic_cloud", false);
     std::string map_file;
     std::string point_cloud_topic;
     this->get_parameter("map_file", map_file);
@@ -194,12 +194,21 @@ void DynamicCloud::callback(const sensor_msgs::msg::PointCloud2::SharedPtr msg)
     auto ta=std::chrono::steady_clock::now();
     try {
         transform_stamped = tf_buffer_.lookupTransform(
-            "rm_frame", msg->header.frame_id, rclcpp::Time(0),
-            rclcpp::Duration::from_seconds(1.0));
+            "rm_frame", msg->header.frame_id, msg->header.stamp,
+            rclcpp::Duration::from_seconds(0.05));
     } catch (tf2::TransformException &ex) {
-        RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 2000,
-            "TF lookup failed (rm_frame<-%s): %s", msg->header.frame_id.c_str(), ex.what());
-        return;
+        try {
+            transform_stamped = tf_buffer_.lookupTransform(
+                "rm_frame", msg->header.frame_id, rclcpp::Time(0),
+                rclcpp::Duration::from_seconds(0.05));
+            RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 2000,
+                "TF lookup at cloud stamp failed (rm_frame<-%s @ %.3f): %s. Falling back to latest TF.",
+                msg->header.frame_id.c_str(), rclcpp::Time(msg->header.stamp).seconds(), ex.what());
+        } catch (tf2::TransformException &fallback_ex) {
+            RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 2000,
+                "TF lookup failed (rm_frame<-%s): %s", msg->header.frame_id.c_str(), fallback_ex.what());
+            return;
+        }
     }
     pcl::PointCloud<pcl::PointXYZ> transformed_cloud;
     auto transform = Eigen::Affine3f::Identity();
@@ -297,6 +306,8 @@ void DynamicCloud::callback(const sensor_msgs::msg::PointCloud2::SharedPtr msg)
         filtered_cloud.size(), dynamic_pointcloud.size(), dynamic_cloud_to_publish.size(), accumulated_cloud.size());
 
     pcl::toROSMsg(other_accumulated_cloud, output);
+    output.header.frame_id = "rm_frame";
+    output.header.stamp = msg->header.stamp;
     other_pub_->publish(output);
     // 筛出飞镖点云
     pcl::PointCloud<pcl::PointXYZ> dart_cloud;
